@@ -1,0 +1,2 @@
+"""Replaceable external-service clients."""
+
