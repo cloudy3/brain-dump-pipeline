@@ -1,13 +1,16 @@
 # Local development
 
-Phase 1 provides the FastAPI health check and secured Telegram webhook. It sends a
-temporary acknowledgement but does not persist messages yet.
+Phase 2 provides the FastAPI health check and secured Telegram webhook. Authorized
+text messages are stored in the isolated `Brain Dump v2` Notion database before the
+bot sends `Saved`.
 
 ## Prerequisites
 
 - Python 3.12 or newer
 - [`uv`](https://docs.astral.sh/uv/getting-started/installation/)
 - A Telegram bot token for manual end-to-end testing
+- A `Brain Dump v2` database and internal Notion connection configured according to
+  [the Notion setup guide](notion-setup.md)
 
 ## Setup
 
@@ -18,6 +21,15 @@ cp .env.example .env
 
 Replace the placeholder values in `.env`. The allowed user and chat IDs are integers.
 For a direct conversation with the bot, they are normally the same value.
+
+Before starting the service, run the read-only target and schema check:
+
+```bash
+uv run python -m app.tools.validate_notion
+```
+
+It must report `Validated isolated Notion target: Brain Dump v2`. This command reads
+the configured database and data source but does not create or modify any page.
 
 Start the development server:
 
@@ -40,8 +52,8 @@ The expected response is:
 ## Exercise the webhook locally
 
 The following request validates the local request flow. Replace the IDs and secret
-with the values from `.env`. Because an authorized text update sends a Telegram API
-acknowledgement, the bot token must also be valid.
+with the values from `.env`. It creates one page in `Brain Dump v2`, then sends a
+Telegram acknowledgement, so both the Notion and Telegram credentials must be valid.
 
 ```bash
 curl -X POST http://127.0.0.1:8000/webhooks/telegram \
@@ -65,10 +77,9 @@ intentionally deferred to Phase 7.
 ## Checks
 
 The default tests use fakes and an in-memory HTTP transport. They never contact
-Telegram and do not require real credentials.
+Telegram or Notion and do not require real credentials.
 
 ```bash
 uv run pytest
 uv run ruff check .
 ```
-

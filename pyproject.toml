@@ -4,13 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "brain-dump-pipeline"
-version = "0.1.0"
+version = "0.2.0"
 description = "A personal Telegram capture and resurfacing service."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.116,<1.0",
     "httpx>=0.28,<1.0",
+    "notion-client>=3.1,<4.0",
     "pydantic-settings>=2.10,<3.0",
     "uvicorn[standard]>=0.35,<1.0",
 ]

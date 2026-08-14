@@ -4,9 +4,11 @@ import logging
 from enum import StrEnum
 
 from app.integrations.telegram import TelegramClient, TelegramDeliveryError
+from app.models.capture import CaptureInput
 from app.models.telegram import TelegramUpdate
+from app.repositories.captures import CaptureRepository
 
-TEMPORARY_ACKNOWLEDGEMENT = "Received — temporary acknowledgement; storage is not enabled yet."
+PERSISTED_ACKNOWLEDGEMENT = "Saved"
 
 logger = logging.getLogger(__name__)
 
@@ -25,10 +27,12 @@ class TelegramUpdateService:
         self,
         *,
         telegram_client: TelegramClient,
+        capture_repository: CaptureRepository,
         allowed_user_id: int,
         allowed_chat_id: int,
     ) -> None:
         self._telegram_client = telegram_client
+        self._capture_repository = capture_repository
         self._allowed_user_id = allowed_user_id
         self._allowed_chat_id = allowed_chat_id
 
@@ -58,10 +62,18 @@ class TelegramUpdateService:
             self._log_outcome(update, UpdateOutcome.IGNORED)
             return UpdateOutcome.IGNORED
 
+        save_status = await self._capture_repository.save_if_new(
+            CaptureInput(
+                original_input=message.text,
+                telegram_update_id=update.update_id,
+                telegram_message_id=message.message_id,
+            )
+        )
+
         try:
             await self._telegram_client.send_message(
                 chat_id=message.chat.id,
-                text=TEMPORARY_ACKNOWLEDGEMENT,
+                text=PERSISTED_ACKNOWLEDGEMENT,
             )
         except TelegramDeliveryError:
             logger.error(
@@ -76,11 +88,20 @@ class TelegramUpdateService:
             )
             raise
 
-        self._log_outcome(update, UpdateOutcome.ACKNOWLEDGED)
+        self._log_outcome(
+            update,
+            UpdateOutcome.ACKNOWLEDGED,
+            persistence_status=save_status.value,
+        )
         return UpdateOutcome.ACKNOWLEDGED
 
     @staticmethod
-    def _log_outcome(update: TelegramUpdate, outcome: UpdateOutcome) -> None:
+    def _log_outcome(
+        update: TelegramUpdate,
+        outcome: UpdateOutcome,
+        *,
+        persistence_status: str | None = None,
+    ) -> None:
         message_id = update.message.message_id if update.message is not None else None
         logger.info(
             "telegram_update_handled",
@@ -89,6 +110,6 @@ class TelegramUpdateService:
                 "update_id": update.update_id,
                 "message_id": message_id,
                 "state": outcome.value,
+                "persistence_status": persistence_status,
             },
         )
-

@@ -11,7 +11,10 @@ from starlette.middleware.base import RequestResponseEndpoint
 from app.api.routes import router
 from app.core.config import Settings
 from app.core.logging import configure_logging
+from app.integrations.notion import NotionSDKGateway
 from app.integrations.telegram import TelegramBotAPIClient, TelegramClient
+from app.repositories.captures import CaptureRepository
+from app.repositories.notion import NotionCaptureRepository
 from app.services.telegram_updates import TelegramUpdateService
 
 logger = logging.getLogger(__name__)
@@ -21,32 +24,50 @@ def create_app(
     *,
     settings: Settings | None = None,
     telegram_client: TelegramClient | None = None,
+    capture_repository: CaptureRepository | None = None,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         effective_settings = settings or Settings()  # type: ignore[call-arg]
         configure_logging(effective_settings.log_level)
 
-        effective_client = telegram_client or TelegramBotAPIClient(
+        effective_telegram_client = telegram_client or TelegramBotAPIClient(
             bot_token=effective_settings.telegram_bot_token,
             api_base_url=str(effective_settings.telegram_api_base_url),
             timeout_seconds=effective_settings.telegram_request_timeout_seconds,
         )
+        notion_gateway = None
+        effective_capture_repository = capture_repository
+        if effective_capture_repository is None:
+            notion_gateway = NotionSDKGateway(
+                token=effective_settings.notion_api_token,
+                timeout_seconds=effective_settings.notion_request_timeout_seconds,
+                notion_version=effective_settings.notion_api_version,
+            )
+            effective_capture_repository = NotionCaptureRepository(
+                gateway=notion_gateway,
+                database_id=effective_settings.notion_brain_dump_database_id,
+                data_source_id=effective_settings.notion_brain_dump_data_source_id,
+            )
         application.state.settings = effective_settings
         application.state.telegram_update_service = TelegramUpdateService(
-            telegram_client=effective_client,
+            telegram_client=effective_telegram_client,
+            capture_repository=effective_capture_repository,
             allowed_user_id=effective_settings.telegram_allowed_user_id,
             allowed_chat_id=effective_settings.telegram_allowed_chat_id,
         )
 
-        yield
-
-        if isinstance(effective_client, TelegramBotAPIClient):
-            await effective_client.aclose()
+        try:
+            yield
+        finally:
+            if isinstance(effective_telegram_client, TelegramBotAPIClient):
+                await effective_telegram_client.aclose()
+            if notion_gateway is not None:
+                await notion_gateway.aclose()
 
     application = FastAPI(
         title="Brain Dump Pipeline",
-        version="0.1.0",
+        version="0.2.0",
         lifespan=lifespan,
     )
 

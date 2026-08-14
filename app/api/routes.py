@@ -1,4 +1,4 @@
-"""Phase 1 HTTP routes."""
+"""HTTP routes for health checks and Telegram updates."""
 
 import secrets
 from typing import Annotated
@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 from app.integrations.telegram import TelegramDeliveryError
 from app.models.telegram import TelegramUpdate, WebhookResponse
+from app.repositories.captures import CapturePersistenceError
 from app.services.telegram_updates import UnauthorizedTelegramUpdate
 
 router = APIRouter()
@@ -41,10 +42,14 @@ async def telegram_webhook(
         outcome = await request.app.state.telegram_update_service.handle(update)
     except UnauthorizedTelegramUpdate as error:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden") from error
+    except CapturePersistenceError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Capture could not be saved",
+        ) from error
     except TelegramDeliveryError as error:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Telegram acknowledgement failed",
         ) from error
     return WebhookResponse(status=outcome.value)
-
