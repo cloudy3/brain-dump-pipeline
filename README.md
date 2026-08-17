@@ -6,6 +6,139 @@ The goal is simple:
 
 > Capture thoughts in seconds, organize them automatically, and bring them back when they are useful.
 
+## Current Status
+
+Phases 1 through 3 are implemented. The service currently provides:
+
+* a FastAPI application with a `/health` endpoint;
+* a Telegram webhook protected by Telegram's secret-token header;
+* a single allowed Telegram user and chat;
+* text capture into an isolated Notion database named exactly `Brain Dump v2`;
+* Gemini structured classification validated by strict Pydantic models;
+* explicit Asia/Singapore timestamps for relative due-date interpretation;
+* safe local fallback metadata when Gemini is unavailable or invalid;
+* idempotency checks using Telegram update and message identifiers;
+* a `Saved` acknowledgement sent only after Notion persistence succeeds; and
+* automated tests that use fakes and never call live Telegram or Notion APIs.
+
+Queries, item actions, resurfacing, scheduling, deployment, and migration are planned
+for later phases and are not implemented yet.
+
+The existing personal Brain Dump is outside the application's write scope and must
+remain untouched. Development writes only to the separate `Brain Dump v2` database.
+
+## Quick Start
+
+### Prerequisites
+
+* Python 3.12 or newer
+* [`uv`](https://docs.astral.sh/uv/getting-started/installation/)
+* a Telegram bot
+* a Gemini API key
+* a Notion internal connection and a separate `Brain Dump v2` database
+
+Create the Notion database and its exact schema by following
+[the Phase 2 Notion setup guide](docs/notion-setup.md). Then install the project and
+create a local environment file:
+
+```bash
+uv sync --extra test
+cp .env.example .env
+```
+
+Fill in `.env`, then run the read-only Notion target and schema validation:
+
+```bash
+uv run python -m app.tools.validate_notion
+```
+
+The expected output is:
+
+```text
+Validated isolated Notion target: Brain Dump v2
+```
+
+Start the API:
+
+```bash
+uv run uvicorn app.main:app --reload
+```
+
+Verify it from another terminal:
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+For a local webhook example and more detailed instructions, see
+[Local development](docs/local-development.md).
+
+Configure Gemini using [the Phase 3 Gemini setup guide](docs/gemini-setup.md).
+
+### Environment Variables
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `TELEGRAM_BOT_TOKEN` | Yes | Token used to send bot acknowledgements |
+| `TELEGRAM_WEBHOOK_SECRET` | Yes | Validates `X-Telegram-Bot-Api-Secret-Token` |
+| `TELEGRAM_ALLOWED_USER_ID` | Yes | Only accepted Telegram sender |
+| `TELEGRAM_ALLOWED_CHAT_ID` | Yes | Only accepted Telegram chat |
+| `GEMINI_API_KEY` | Yes | Gemini Developer API credential |
+| `GEMINI_MODEL` | No | Classification model; defaults to `gemini-3.5-flash-lite` |
+| `NOTION_API_TOKEN` | Yes | Token for the narrowly shared Notion integration |
+| `NOTION_BRAIN_DUMP_DATABASE_ID` | Yes | ID of the `Brain Dump v2` database |
+| `NOTION_BRAIN_DUMP_DATA_SOURCE_ID` | Yes | ID of its data source |
+| `TELEGRAM_API_BASE_URL` | No | Telegram API base URL; defaults to the official API |
+| `TELEGRAM_REQUEST_TIMEOUT_SECONDS` | No | Telegram timeout; defaults to 10 seconds |
+| `GEMINI_REQUEST_TIMEOUT_SECONDS` | No | Gemini timeout; defaults to 10 seconds |
+| `NOTION_API_VERSION` | No | Notion API version; defaults to `2026-03-11` |
+| `NOTION_REQUEST_TIMEOUT_SECONDS` | No | Notion timeout; defaults to 10 seconds |
+| `LOG_LEVEL` | No | Application log level; defaults to `INFO` |
+
+Never commit `.env` or real credentials.
+
+### Checks
+
+```bash
+uv run pytest
+uv run ruff check .
+```
+
+The default suite replaces external services with fakes or an in-memory HTTP
+transport, so it is deterministic and does not require live credentials.
+
+## Implemented Request Flow
+
+```text
+Telegram POST /webhooks/telegram
+        |
+        v
+Validate webhook secret
+        |
+        v
+Authorize configured user and chat
+        |
+        v
+Check Telegram update/message IDs in Brain Dump v2
+        |
+        +---- Existing capture ----------------------+
+        |                                            |
+        +---- New capture ----> Gemini classification
+                                      |
+                                      +---- Failure ----> Safe local fallback
+                                      |
+                                      v
+                               Persist in Notion
+                                   |
+                                   v
+                           Send classified confirmation
+```
+
+Blank or unsupported messages are ignored. An invalid secret or unauthorized sender
+receives `403`. A Notion failure receives `502`, and no success acknowledgement is
+sent. If acknowledgement delivery fails after persistence, a Telegram retry finds
+the existing record instead of classifying or inserting it again.
+
 ## Problem
 
 Traditional reminder and note-taking systems are easy to write into but easy to forget.
@@ -612,8 +745,8 @@ The first version intentionally excludes:
 
 These features should only be considered after the basic capture and resurfacing loop proves useful.
 
-## Project Status
+## Development State
 
-Work in progress.
-
-Development follows an incremental phase-based approach, with each phase implemented and tested before moving to the next one.
+Phase 3 is complete. Development stops at each phase boundary so the next phase can
+be reviewed before implementation. Phase 4 will add Telegram item actions; it has
+not started.

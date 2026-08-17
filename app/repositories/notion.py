@@ -6,7 +6,13 @@ from collections.abc import Mapping
 from typing import Any
 
 from app.integrations.notion import NotionGateway, NotionIntegrationError, NotionResponse
-from app.models.capture import CaptureInput, CaptureSaveStatus
+from app.models.capture import (
+    CaptureInput,
+    CaptureSaveResult,
+    CaptureSaveStatus,
+    CaptureSummary,
+)
+from app.models.classification import CaptureType, Confidence, Domain, ShoppingKind
 from app.repositories.captures import CapturePersistenceError
 
 logger = logging.getLogger(__name__)
@@ -98,12 +104,40 @@ class NotionCaptureRepository:
                 raise CapturePersistenceError("Notion schema validation failed") from error
             self._validated = True
 
-    async def save_if_new(self, capture: CaptureInput) -> CaptureSaveStatus:
+    async def find_by_telegram_identity(
+        self,
+        *,
+        telegram_update_id: int,
+        telegram_message_id: int,
+    ) -> CaptureSummary | None:
+        try:
+            await self.validate()
+            return await self._find(
+                telegram_update_id=telegram_update_id,
+                telegram_message_id=telegram_message_id,
+            )
+        except CapturePersistenceError:
+            raise
+        except NotionIntegrationError as error:
+            self._log_failure("notion_capture_lookup")
+            raise CapturePersistenceError("Notion capture lookup failed") from error
+        except Exception as error:
+            self._log_failure("notion_capture_lookup")
+            raise CapturePersistenceError("Notion capture lookup failed") from error
+
+    async def save_if_new(self, capture: CaptureInput) -> CaptureSaveResult:
         try:
             await self.validate()
             async with self._save_lock:
-                if await self._exists(capture):
-                    return CaptureSaveStatus.EXISTING
+                existing = await self._find(
+                    telegram_update_id=capture.telegram_update_id,
+                    telegram_message_id=capture.telegram_message_id,
+                )
+                if existing is not None:
+                    return CaptureSaveResult(
+                        status=CaptureSaveStatus.EXISTING,
+                        summary=existing,
+                    )
                 await self._gateway.create_page(
                     data_source_id=self._data_source_id,
                     properties=self._properties_for(capture),
@@ -116,20 +150,28 @@ class NotionCaptureRepository:
         except Exception as error:
             self._log_failure("notion_capture_save")
             raise CapturePersistenceError("Notion capture persistence failed") from error
-        return CaptureSaveStatus.CREATED
+        return CaptureSaveResult(
+            status=CaptureSaveStatus.CREATED,
+            summary=self._summary_for(capture),
+        )
 
-    async def _exists(self, capture: CaptureInput) -> bool:
+    async def _find(
+        self,
+        *,
+        telegram_update_id: int,
+        telegram_message_id: int,
+    ) -> CaptureSummary | None:
         response = await self._gateway.query_data_source(
             data_source_id=self._data_source_id,
             filter_={
                 "or": [
                     {
                         "property": "TelegramUpdateId",
-                        "number": {"equals": capture.telegram_update_id},
+                        "number": {"equals": telegram_update_id},
                     },
                     {
                         "property": "TelegramMessageId",
-                        "number": {"equals": capture.telegram_message_id},
+                        "number": {"equals": telegram_message_id},
                     },
                 ]
             },
@@ -138,7 +180,12 @@ class NotionCaptureRepository:
         results = response.get("results")
         if not isinstance(results, list):
             raise CapturePersistenceError("Notion returned an invalid query response")
-        return bool(results)
+        if not results:
+            return None
+        page = results[0]
+        if not isinstance(page, Mapping):
+            raise CapturePersistenceError("Notion returned an invalid capture page")
+        return self._summary_from_page(page)
 
     def _validate_target(
         self,
@@ -200,18 +247,72 @@ class NotionCaptureRepository:
 
     @staticmethod
     def _properties_for(capture: CaptureInput) -> dict[str, Any]:
-        original_text = _rich_text(capture.original_input)
-        return {
-            "Title": {"title": original_text},
-            "Type": {"select": {"name": "Thought"}},
-            "Domain": {"select": {"name": "Personal"}},
-            "OriginalInput": {"rich_text": original_text},
-            "SurfaceContext": {"select": {"name": "Anytime"}},
+        classification = capture.classification
+        properties: dict[str, Any] = {
+            "Title": {"title": _rich_text(classification.title)},
+            "Type": {"select": {"name": classification.type.value}},
+            "Domain": {"select": {"name": classification.domain.value}},
+            "OriginalInput": {"rich_text": _rich_text(capture.original_input)},
+            "SurfaceContext": {"select": {"name": classification.surface_context.value}},
             "PurchaseFocus": {"checkbox": False},
-            "Confidence": {"select": {"name": "Low"}},
+            "Confidence": {"select": {"name": classification.confidence.value}},
             "TelegramMessageId": {"number": capture.telegram_message_id},
             "TelegramUpdateId": {"number": capture.telegram_update_id},
         }
+        if classification.location is not None:
+            properties["Location"] = {"rich_text": _rich_text(classification.location)}
+        if classification.due is not None:
+            properties["Due"] = {"date": {"start": classification.due.isoformat()}}
+        if classification.shopping_kind is not ShoppingKind.NONE:
+            properties["ShoppingKind"] = {
+                "select": {"name": classification.shopping_kind.value}
+            }
+        return properties
+
+    @staticmethod
+    def _summary_for(capture: CaptureInput) -> CaptureSummary:
+        classification = capture.classification
+        return CaptureSummary(
+            title=classification.title,
+            type=classification.type,
+            domain=classification.domain,
+            confidence=classification.confidence,
+        )
+
+    @classmethod
+    def _summary_from_page(cls, page: Mapping[str, Any]) -> CaptureSummary:
+        properties = page.get("properties")
+        if not isinstance(properties, Mapping):
+            raise CapturePersistenceError("Stored Notion capture has no readable properties")
+        title_property = properties.get("Title")
+        title_value = (
+            title_property.get("title") if isinstance(title_property, Mapping) else None
+        )
+        title = cls._plain_text(title_value)
+        type_name = cls._select_name(properties.get("Type"))
+        domain_name = cls._select_name(properties.get("Domain"))
+        confidence_name = cls._select_name(properties.get("Confidence"))
+        try:
+            return CaptureSummary(
+                title=title,
+                type=CaptureType(type_name),
+                domain=Domain(domain_name),
+                confidence=Confidence(confidence_name),
+            )
+        except (ValueError, TypeError) as error:
+            raise CapturePersistenceError(
+                "Stored Notion capture has invalid confirmation properties"
+            ) from error
+
+    @staticmethod
+    def _select_name(value: object) -> str:
+        if not isinstance(value, Mapping):
+            return ""
+        select = value.get("select")
+        if not isinstance(select, Mapping):
+            return ""
+        name = select.get("name")
+        return name if isinstance(name, str) else ""
 
     @staticmethod
     def _plain_text(value: object) -> str:

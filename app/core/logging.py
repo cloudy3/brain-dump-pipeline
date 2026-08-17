@@ -19,6 +19,7 @@ class JsonFormatter(logging.Formatter):
         "latency_ms",
         "error_type",
         "persistence_status",
+        "classification_status",
     )
 
     def format(self, record: logging.LogRecord) -> str:

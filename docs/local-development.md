@@ -1,14 +1,15 @@
 # Local development
 
-Phase 2 provides the FastAPI health check and secured Telegram webhook. Authorized
-text messages are stored in the isolated `Brain Dump v2` Notion database before the
-bot sends `Saved`.
+Phase 3 provides the FastAPI health check and secured Telegram webhook. Authorized
+text messages are classified through Gemini structured output and stored in the
+isolated `Brain Dump v2` Notion database before the bot sends a compact confirmation.
 
 ## Prerequisites
 
 - Python 3.12 or newer
 - [`uv`](https://docs.astral.sh/uv/getting-started/installation/)
 - A Telegram bot token for manual end-to-end testing
+- A Gemini API key configured according to [the Gemini setup guide](gemini-setup.md)
 - A `Brain Dump v2` database and internal Notion connection configured according to
   [the Notion setup guide](notion-setup.md)
 
@@ -52,8 +53,9 @@ The expected response is:
 ## Exercise the webhook locally
 
 The following request validates the local request flow. Replace the IDs and secret
-with the values from `.env`. It creates one page in `Brain Dump v2`, then sends a
-Telegram acknowledgement, so both the Notion and Telegram credentials must be valid.
+with the values from `.env`. It classifies the text, creates one page in `Brain Dump
+v2`, then sends a Telegram acknowledgement, so the Gemini, Notion, and Telegram
+credentials must be valid.
 
 ```bash
 curl -X POST http://127.0.0.1:8000/webhooks/telegram \
@@ -77,9 +79,12 @@ intentionally deferred to Phase 7.
 ## Checks
 
 The default tests use fakes and an in-memory HTTP transport. They never contact
-Telegram or Notion and do not require real credentials.
+Gemini, Telegram, or Notion and do not require real credentials.
 
 ```bash
 uv run pytest
 uv run ruff check .
 ```
+
+To run the optional live classifier dataset without writing to Notion, see
+[Gemini setup](gemini-setup.md#optional-live-evaluation).

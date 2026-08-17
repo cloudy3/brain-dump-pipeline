@@ -11,10 +11,15 @@ from starlette.middleware.base import RequestResponseEndpoint
 from app.api.routes import router
 from app.core.config import Settings
 from app.core.logging import configure_logging
+from app.integrations.gemini import GeminiSDKClassificationGateway
 from app.integrations.notion import NotionSDKGateway
 from app.integrations.telegram import TelegramBotAPIClient, TelegramClient
 from app.repositories.captures import CaptureRepository
 from app.repositories.notion import NotionCaptureRepository
+from app.services.classification import (
+    CaptureClassifier,
+    ClassificationService,
+)
 from app.services.telegram_updates import TelegramUpdateService
 
 logger = logging.getLogger(__name__)
@@ -25,6 +30,7 @@ def create_app(
     settings: Settings | None = None,
     telegram_client: TelegramClient | None = None,
     capture_repository: CaptureRepository | None = None,
+    classifier: ClassificationService | None = None,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
@@ -37,6 +43,7 @@ def create_app(
             timeout_seconds=effective_settings.telegram_request_timeout_seconds,
         )
         notion_gateway = None
+        gemini_gateway = None
         effective_capture_repository = capture_repository
         if effective_capture_repository is None:
             notion_gateway = NotionSDKGateway(
@@ -49,10 +56,19 @@ def create_app(
                 database_id=effective_settings.notion_brain_dump_database_id,
                 data_source_id=effective_settings.notion_brain_dump_data_source_id,
             )
+        effective_classifier = classifier
+        if effective_classifier is None:
+            gemini_gateway = GeminiSDKClassificationGateway(
+                api_key=effective_settings.gemini_api_key,
+                model=effective_settings.gemini_model,
+                timeout_seconds=effective_settings.gemini_request_timeout_seconds,
+            )
+            effective_classifier = CaptureClassifier(gateway=gemini_gateway)
         application.state.settings = effective_settings
         application.state.telegram_update_service = TelegramUpdateService(
             telegram_client=effective_telegram_client,
             capture_repository=effective_capture_repository,
+            classifier=effective_classifier,
             allowed_user_id=effective_settings.telegram_allowed_user_id,
             allowed_chat_id=effective_settings.telegram_allowed_chat_id,
         )
@@ -64,10 +80,12 @@ def create_app(
                 await effective_telegram_client.aclose()
             if notion_gateway is not None:
                 await notion_gateway.aclose()
+            if gemini_gateway is not None:
+                await gemini_gateway.aclose()
 
     application = FastAPI(
         title="Brain Dump Pipeline",
-        version="0.2.0",
+        version="0.3.0",
         lifespan=lifespan,
     )
 

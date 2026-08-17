@@ -1,0 +1,122 @@
+[
+  {
+    "name": "morning_power_bank",
+    "input": "Bring my power bank to work tomorrow",
+    "reference_datetime": "2026-08-16T09:00:00+08:00",
+    "expected": {"title": "Bring power bank to work", "type": "Task", "domain": "Personal", "location": null, "due": "2026-08-17", "surface_context": "Morning", "shopping_kind": "None", "confidence": "High"}
+  },
+  {
+    "name": "toothpaste_after_work",
+    "input": "Buy toothpaste after work",
+    "reference_datetime": "2026-08-16T09:00:00+08:00",
+    "expected": {"title": "Buy toothpaste", "type": "Task", "domain": "Shopping", "location": null, "due": null, "surface_context": "AfterWork", "shopping_kind": "Routine", "confidence": "High"}
+  },
+  {
+    "name": "routine_groceries",
+    "input": "Need milk and eggs",
+    "reference_datetime": "2026-08-16T09:00:00+08:00",
+    "expected": {"title": "Buy milk and eggs", "type": "Task", "domain": "Shopping", "location": null, "due": null, "surface_context": "AfterWork", "shopping_kind": "Routine", "confidence": "High"}
+  },
+  {
+    "name": "planned_monitor",
+    "input": "I want to buy a new monitor eventually",
+    "reference_datetime": "2026-08-16T09:00:00+08:00",
+    "expected": {"title": "Buy a new monitor", "type": "Task", "domain": "Shopping", "location": null, "due": null, "surface_context": "Evening", "shopping_kind": "Planned", "confidence": "High"}
+  },
+  {
+    "name": "portfolio_dark_mode",
+    "input": "Add dark mode support to my portfolio",
+    "reference_datetime": "2026-08-16T09:00:00+08:00",
+    "expected": {"title": "Add dark mode support", "type": "Idea", "domain": "Portfolio", "location": null, "due": null, "surface_context": "Evening", "shopping_kind": "None", "confidence": "High"}
+  },
+  {
+    "name": "tech_dependency_injection",
+    "input": "Look into Python dependency injection",
+    "reference_datetime": "2026-08-16T09:00:00+08:00",
+    "expected": {"title": "Look into Python dependency injection", "type": "Idea", "domain": "Tech", "location": null, "due": null, "surface_context": "Evening", "shopping_kind": "None", "confidence": "High"}
+  },
+  {
+    "name": "orchard_place_reference",
+    "input": "Library@Orchard is a nice place to chill",
+    "reference_datetime": "2026-08-16T09:00:00+08:00",
+    "expected": {"title": "Library@Orchard is a nice place to chill", "type": "Reference", "domain": "Places", "location": "Orchard", "due": null, "surface_context": "OnDemand", "shopping_kind": "None", "confidence": "High"}
+  },
+  {
+    "name": "somerset_dessert",
+    "input": "Try somewhere for dessert at Somerset",
+    "reference_datetime": "2026-08-16T09:00:00+08:00",
+    "expected": {"title": "Try dessert at Somerset", "type": "Idea", "domain": "Places", "location": "Somerset", "due": null, "surface_context": "Weekend", "shopping_kind": "None", "confidence": "Medium"}
+  },
+  {
+    "name": "pottery_date",
+    "input": "Maybe do pottery for a date next month",
+    "reference_datetime": "2026-08-16T09:00:00+08:00",
+    "expected": {"title": "Try pottery for a date", "type": "Idea", "domain": "Dating", "location": null, "due": null, "surface_context": "Weekend", "shopping_kind": "None", "confidence": "Medium"}
+  },
+  {
+    "name": "hokkaido_travel",
+    "input": "Visit Hokkaido someday",
+    "reference_datetime": "2026-08-16T09:00:00+08:00",
+    "expected": {"title": "Visit Hokkaido", "type": "Idea", "domain": "Travel", "location": "Hokkaido", "due": null, "surface_context": "Weekend", "shopping_kind": "None", "confidence": "High"}
+  },
+  {
+    "name": "career_reference",
+    "input": "Remember this interview question: what is optimistic locking?",
+    "reference_datetime": "2026-08-16T09:00:00+08:00",
+    "expected": {"title": "Interview question about optimistic locking", "type": "Reference", "domain": "Career", "location": null, "due": null, "surface_context": "OnDemand", "shopping_kind": "None", "confidence": "High"}
+  },
+  {
+    "name": "career_thought",
+    "input": "I think I prefer backend-heavy software engineering roles",
+    "reference_datetime": "2026-08-16T09:00:00+08:00",
+    "expected": {"title": "Prefer backend-heavy engineering roles", "type": "Thought", "domain": "Career", "location": null, "due": null, "surface_context": "Anytime", "shopping_kind": "None", "confidence": "High"}
+  },
+  {
+    "name": "github_readme_task",
+    "input": "Clean up my GitHub README",
+    "reference_datetime": "2026-08-16T09:00:00+08:00",
+    "expected": {"title": "Clean up GitHub README", "type": "Task", "domain": "Tech", "location": null, "due": null, "surface_context": "Evening", "shopping_kind": "None", "confidence": "Medium"}
+  },
+  {
+    "name": "passport_tomorrow",
+    "input": "Pack my passport before I leave tomorrow",
+    "reference_datetime": "2026-08-16T09:00:00+08:00",
+    "expected": {"title": "Pack passport", "type": "Task", "domain": "Travel", "location": null, "due": "2026-08-17", "surface_context": "Morning", "shopping_kind": "None", "confidence": "High"}
+  },
+  {
+    "name": "date_today",
+    "input": "Submit the form today",
+    "reference_datetime": "2026-08-16T09:00:00+08:00",
+    "expected": {"title": "Submit the form", "type": "Task", "domain": "Personal", "location": null, "due": "2026-08-16", "surface_context": "Anytime", "shopping_kind": "None", "confidence": "High"}
+  },
+  {
+    "name": "date_tomorrow",
+    "input": "Bring the umbrella tomorrow",
+    "reference_datetime": "2026-08-16T09:00:00+08:00",
+    "expected": {"title": "Bring the umbrella", "type": "Task", "domain": "Personal", "location": null, "due": "2026-08-17", "surface_context": "Morning", "shopping_kind": "None", "confidence": "High"}
+  },
+  {
+    "name": "date_friday",
+    "input": "Submit the report Friday",
+    "reference_datetime": "2026-08-16T09:00:00+08:00",
+    "expected": {"title": "Submit the report", "type": "Task", "domain": "Personal", "location": null, "due": "2026-08-21", "surface_context": "Anytime", "shopping_kind": "None", "confidence": "High"}
+  },
+  {
+    "name": "date_next_monday",
+    "input": "Call the clinic next Monday",
+    "reference_datetime": "2026-08-16T09:00:00+08:00",
+    "expected": {"title": "Call the clinic", "type": "Task", "domain": "Personal", "location": null, "due": "2026-08-24", "surface_context": "Anytime", "shopping_kind": "None", "confidence": "High"}
+  },
+  {
+    "name": "date_explicit_iso",
+    "input": "Renew the pass on 2026-09-03",
+    "reference_datetime": "2026-08-16T09:00:00+08:00",
+    "expected": {"title": "Renew the pass", "type": "Task", "domain": "Personal", "location": null, "due": "2026-09-03", "surface_context": "Anytime", "shopping_kind": "None", "confidence": "High"}
+  },
+  {
+    "name": "date_absent",
+    "input": "Organize my desk sometime",
+    "reference_datetime": "2026-08-16T09:00:00+08:00",
+    "expected": {"title": "Organize my desk", "type": "Task", "domain": "Personal", "location": null, "due": null, "surface_context": "Anytime", "shopping_kind": "None", "confidence": "High"}
+  }
+]

@@ -1,12 +1,21 @@
 import asyncio
 from collections.abc import Mapping
 from copy import deepcopy
+from datetime import date
 from typing import Any
 
 import pytest
 
 from app.integrations.notion import NotionIntegrationError, NotionResponse
 from app.models.capture import CaptureInput, CaptureSaveStatus
+from app.models.classification import (
+    CaptureClassification,
+    CaptureType,
+    Confidence,
+    Domain,
+    ShoppingKind,
+    SurfaceContext,
+)
 from app.repositories.captures import CapturePersistenceError
 from app.repositories.notion import (
     EXPECTED_PROPERTY_TYPES,
@@ -84,7 +93,7 @@ class FakeNotionGateway:
                 properties["TelegramMessageId"]["number"],
             }
             if requested_ids & stored_ids:
-                matches.append({"id": "existing-page"})
+                matches.append({"id": "existing-page", "properties": properties})
         return {"results": matches[:1]}
 
     async def create_page(
@@ -124,28 +133,44 @@ def capture() -> CaptureInput:
         original_input="  Preserve this exactly\nincluding whitespace  ",
         telegram_update_id=9001,
         telegram_message_id=42,
+        classification=CaptureClassification(
+            title="Preserve this exactly",
+            type=CaptureType.TASK,
+            domain=Domain.PERSONAL,
+            location="Singapore",
+            due=date(2026, 8, 20),
+            surface_context=SurfaceContext.MORNING,
+            shopping_kind=ShoppingKind.NONE,
+            confidence=Confidence.HIGH,
+        ),
     )
 
 
-async def test_successful_persistence_uses_safe_defaults_and_exact_input(
+async def test_successful_persistence_uses_classification_and_exact_input(
     repository: NotionCaptureRepository,
     gateway: FakeNotionGateway,
     capture: CaptureInput,
 ) -> None:
     result = await repository.save_if_new(capture)
 
-    assert result is CaptureSaveStatus.CREATED
+    assert result.status is CaptureSaveStatus.CREATED
     assert len(gateway.created_properties) == 1
     properties = gateway.created_properties[0]
     title = "".join(item["text"]["content"] for item in properties["Title"]["title"])
     original = "".join(
         item["text"]["content"] for item in properties["OriginalInput"]["rich_text"]
     )
-    assert title == original == capture.original_input
-    assert properties["Type"] == {"select": {"name": "Thought"}}
+    assert title == "Preserve this exactly"
+    assert original == capture.original_input
+    assert properties["Type"] == {"select": {"name": "Task"}}
     assert properties["Domain"] == {"select": {"name": "Personal"}}
-    assert properties["SurfaceContext"] == {"select": {"name": "Anytime"}}
-    assert properties["Confidence"] == {"select": {"name": "Low"}}
+    assert properties["Location"] == {
+        "rich_text": [{"type": "text", "text": {"content": "Singapore"}}]
+    }
+    assert properties["Due"] == {"date": {"start": "2026-08-20"}}
+    assert properties["SurfaceContext"] == {"select": {"name": "Morning"}}
+    assert "ShoppingKind" not in properties
+    assert properties["Confidence"] == {"select": {"name": "High"}}
     assert properties["PurchaseFocus"] == {"checkbox": False}
     assert properties["TelegramUpdateId"] == {"number": 9001}
     assert properties["TelegramMessageId"] == {"number": 42}
@@ -159,8 +184,9 @@ async def test_duplicate_capture_is_not_created_again(
     first = await repository.save_if_new(capture)
     second = await repository.save_if_new(capture)
 
-    assert first is CaptureSaveStatus.CREATED
-    assert second is CaptureSaveStatus.EXISTING
+    assert first.status is CaptureSaveStatus.CREATED
+    assert second.status is CaptureSaveStatus.EXISTING
+    assert second.summary == first.summary
     assert len(gateway.created_properties) == 1
     assert gateway.query_count == 2
 
@@ -175,7 +201,10 @@ async def test_concurrent_duplicate_capture_is_serialized(
         repository.save_if_new(capture),
     )
 
-    assert sorted(results) == [CaptureSaveStatus.CREATED, CaptureSaveStatus.EXISTING]
+    assert {result.status for result in results} == {
+        CaptureSaveStatus.CREATED,
+        CaptureSaveStatus.EXISTING,
+    }
     assert len(gateway.created_properties) == 1
 
 
@@ -259,6 +288,16 @@ async def test_long_input_is_chunked_without_losing_text(
         original_input=original,
         telegram_update_id=9002,
         telegram_message_id=43,
+        classification=CaptureClassification(
+            title="Long capture",
+            type=CaptureType.THOUGHT,
+            domain=Domain.PERSONAL,
+            location=None,
+            due=None,
+            surface_context=SurfaceContext.ANYTIME,
+            shopping_kind=ShoppingKind.NONE,
+            confidence=Confidence.LOW,
+        ),
     )
 
     await repository.save_if_new(capture)
@@ -266,3 +305,45 @@ async def test_long_input_is_chunked_without_losing_text(
     rich_text = gateway.created_properties[0]["OriginalInput"]["rich_text"]
     assert len(rich_text) == 3
     assert "".join(item["text"]["content"] for item in rich_text) == original
+
+
+async def test_routine_shopping_properties_are_persisted(
+    repository: NotionCaptureRepository,
+    gateway: FakeNotionGateway,
+) -> None:
+    capture = CaptureInput(
+        original_input="Need milk and eggs",
+        telegram_update_id=9003,
+        telegram_message_id=44,
+        classification=CaptureClassification(
+            title="Buy milk and eggs",
+            type=CaptureType.TASK,
+            domain=Domain.SHOPPING,
+            location=None,
+            due=None,
+            surface_context=SurfaceContext.AFTER_WORK,
+            shopping_kind=ShoppingKind.ROUTINE,
+            confidence=Confidence.HIGH,
+        ),
+    )
+
+    await repository.save_if_new(capture)
+
+    properties = gateway.created_properties[0]
+    assert properties["ShoppingKind"] == {"select": {"name": "Routine"}}
+    assert "Location" not in properties
+    assert "Due" not in properties
+
+
+async def test_lookup_returns_stored_confirmation_without_creating(
+    repository: NotionCaptureRepository,
+    capture: CaptureInput,
+) -> None:
+    created = await repository.save_if_new(capture)
+
+    found = await repository.find_by_telegram_identity(
+        telegram_update_id=capture.telegram_update_id,
+        telegram_message_id=capture.telegram_message_id,
+    )
+
+    assert found == created.summary

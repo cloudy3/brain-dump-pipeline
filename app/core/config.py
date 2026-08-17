@@ -5,16 +5,28 @@ from typing import Literal
 from pydantic import AnyHttpUrl, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+ENV_SETTINGS_CONFIG = SettingsConfigDict(
+    env_file=".env",
+    env_file_encoding="utf-8",
+    extra="ignore",
+    frozen=True,
+)
 
-class Settings(BaseSettings):
+
+class GeminiSettings(BaseSettings):
+    """Gemini settings shared by the application and live evaluation tool."""
+
+    model_config = ENV_SETTINGS_CONFIG
+
+    gemini_api_key: SecretStr = Field(min_length=1)
+    gemini_model: str = Field(default="gemini-3.5-flash-lite", min_length=1)
+    gemini_request_timeout_seconds: float = Field(default=10.0, gt=0)
+
+
+class Settings(GeminiSettings):
     """Environment-backed application configuration."""
 
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-        frozen=True,
-    )
+    model_config = ENV_SETTINGS_CONFIG
 
     telegram_bot_token: SecretStr = Field(min_length=1)
     telegram_webhook_secret: SecretStr = Field(min_length=1)

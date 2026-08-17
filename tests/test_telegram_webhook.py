@@ -5,15 +5,19 @@ import httpx
 import pytest
 
 from app.core.config import Settings
+from app.integrations.gemini import GeminiResponseError
 from app.integrations.telegram import TelegramDeliveryError
 from app.main import create_app
-from app.models.capture import CaptureInput, CaptureSaveStatus
+from app.models.capture import CaptureInput, CaptureSaveResult, CaptureSummary
+from app.models.classification import CaptureClassification
 from app.repositories.captures import CapturePersistenceError
-from app.services.telegram_updates import PERSISTED_ACKNOWLEDGEMENT
+from app.services.classification import CaptureClassifier
 from tests.conftest import (
     ALLOWED_CHAT_ID,
     BOT_TOKEN,
+    DEFAULT_CLASSIFICATION,
     FakeCaptureRepository,
+    FakeClassifier,
     FakeTelegramClient,
 )
 
@@ -22,6 +26,7 @@ async def test_authorized_text_update_is_acknowledged(
     client: httpx.AsyncClient,
     telegram_client: FakeTelegramClient,
     capture_repository: FakeCaptureRepository,
+    classifier: FakeClassifier,
     webhook_headers: dict[str, str],
     text_update: dict[str, object],
 ) -> None:
@@ -32,15 +37,20 @@ async def test_authorized_text_update_is_acknowledged(
     assert response.status_code == 200
     assert response.json() == {"status": "acknowledged"}
     assert telegram_client.sent_messages == [
-        (ALLOWED_CHAT_ID, PERSISTED_ACKNOWLEDGEMENT)
+        (
+            ALLOWED_CHAT_ID,
+            "Saved · Idea · Portfolio\nRemember architecture sketch",
+        )
     ]
     assert capture_repository.saved_captures == [
         CaptureInput(
             original_input="Remember the architecture sketch",
             telegram_update_id=9001,
             telegram_message_id=42,
+            classification=DEFAULT_CLASSIFICATION,
         )
     ]
+    assert len(classifier.calls) == 1
 
 
 @pytest.mark.parametrize(
@@ -54,6 +64,7 @@ async def test_missing_or_invalid_webhook_secret_is_rejected(
     client: httpx.AsyncClient,
     telegram_client: FakeTelegramClient,
     capture_repository: FakeCaptureRepository,
+    classifier: FakeClassifier,
     text_update: dict[str, object],
     headers: dict[str, str],
 ) -> None:
@@ -63,6 +74,7 @@ async def test_missing_or_invalid_webhook_secret_is_rejected(
     assert response.json() == {"detail": "Forbidden"}
     assert telegram_client.sent_messages == []
     assert capture_repository.save_attempts == 0
+    assert classifier.calls == []
 
 
 @pytest.mark.parametrize(
@@ -76,6 +88,7 @@ async def test_unauthorized_user_or_chat_is_rejected(
     client: httpx.AsyncClient,
     telegram_client: FakeTelegramClient,
     capture_repository: FakeCaptureRepository,
+    classifier: FakeClassifier,
     webhook_headers: dict[str, str],
     text_update: dict[str, object],
     field: str,
@@ -90,6 +103,7 @@ async def test_unauthorized_user_or_chat_is_rejected(
     assert response.json() == {"detail": "Forbidden"}
     assert telegram_client.sent_messages == []
     assert capture_repository.save_attempts == 0
+    assert classifier.calls == []
 
 
 @pytest.mark.parametrize(
@@ -111,6 +125,7 @@ async def test_unsupported_updates_are_deterministic_noops(
     client: httpx.AsyncClient,
     telegram_client: FakeTelegramClient,
     capture_repository: FakeCaptureRepository,
+    classifier: FakeClassifier,
     webhook_headers: dict[str, str],
     update: dict[str, object],
 ) -> None:
@@ -125,12 +140,14 @@ async def test_unsupported_updates_are_deterministic_noops(
     assert first_response.json() == second_response.json() == {"status": "ignored"}
     assert telegram_client.sent_messages == []
     assert capture_repository.save_attempts == 0
+    assert classifier.calls == []
 
 
 async def test_duplicate_delivery_persists_once_and_acknowledges_each_delivery(
     client: httpx.AsyncClient,
     telegram_client: FakeTelegramClient,
     capture_repository: FakeCaptureRepository,
+    classifier: FakeClassifier,
     webhook_headers: dict[str, str],
     text_update: dict[str, object],
 ) -> None:
@@ -143,10 +160,11 @@ async def test_duplicate_delivery_persists_once_and_acknowledges_each_delivery(
 
     assert first_response.status_code == second_response.status_code == 200
     assert len(capture_repository.saved_captures) == 1
-    assert capture_repository.save_attempts == 2
+    assert capture_repository.save_attempts == 1
+    assert len(classifier.calls) == 1
     assert telegram_client.sent_messages == [
-        (ALLOWED_CHAT_ID, PERSISTED_ACKNOWLEDGEMENT),
-        (ALLOWED_CHAT_ID, PERSISTED_ACKNOWLEDGEMENT),
+        (ALLOWED_CHAT_ID, "Saved · Idea · Portfolio\nRemember architecture sketch"),
+        (ALLOWED_CHAT_ID, "Saved · Idea · Portfolio\nRemember architecture sketch"),
     ]
 
 
@@ -158,10 +176,12 @@ async def test_acknowledgement_happens_after_persistence(
     events: list[str] = []
     repository = FakeCaptureRepository(events=events)
     telegram = FakeTelegramClient(events=events)
+    classifier = FakeClassifier(events=events)
     application = create_app(
         settings=settings,
         telegram_client=telegram,
         capture_repository=repository,
+        classifier=classifier,
     )
 
     async with application.router.lifespan_context(application):
@@ -172,11 +192,19 @@ async def test_acknowledgement_happens_after_persistence(
             )
 
     assert response.status_code == 200
-    assert events == ["repository", "telegram"]
+    assert events == ["lookup", "classifier", "repository", "telegram"]
 
 
 class FailingCaptureRepository:
-    async def save_if_new(self, capture: CaptureInput) -> CaptureSaveStatus:
+    async def find_by_telegram_identity(
+        self,
+        *,
+        telegram_update_id: int,
+        telegram_message_id: int,
+    ) -> CaptureSummary | None:
+        return None
+
+    async def save_if_new(self, capture: CaptureInput) -> CaptureSaveResult:
         raise CapturePersistenceError("safe persistence error")
 
     async def validate(self) -> None:
@@ -193,6 +221,7 @@ async def test_notion_failure_does_not_send_success_acknowledgement(
         settings=settings,
         telegram_client=telegram,
         capture_repository=FailingCaptureRepository(),
+        classifier=FakeClassifier(),
     )
 
     async with application.router.lifespan_context(application):
@@ -223,6 +252,7 @@ async def test_telegram_failure_returns_explicit_error_without_sensitive_logs(
         settings=settings,
         telegram_client=FailingTelegramClient(),
         capture_repository=repository,
+        classifier=FakeClassifier(),
     )
 
     with caplog.at_level(logging.INFO):
@@ -244,3 +274,52 @@ async def test_telegram_failure_returns_explicit_error_without_sensitive_logs(
     combined_logs = " ".join(record.getMessage() for record in caplog.records)
     assert BOT_TOKEN not in combined_logs
     assert "Remember the architecture sketch" not in combined_logs
+
+
+class FailingClassificationGateway:
+    async def classify(self, **_: object) -> CaptureClassification:
+        raise GeminiResponseError("invalid structured output")
+
+
+async def test_gemini_failure_uses_fallback_and_still_persists_exact_input(
+    settings: Settings,
+    webhook_headers: dict[str, str],
+    text_update: dict[str, object],
+) -> None:
+    repository = FakeCaptureRepository()
+    telegram = FakeTelegramClient()
+    application = create_app(
+        settings=settings,
+        telegram_client=telegram,
+        capture_repository=repository,
+        classifier=CaptureClassifier(gateway=FailingClassificationGateway()),
+    )
+
+    async with application.router.lifespan_context(application):
+        transport = httpx.ASGITransport(app=application)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post(
+                "/webhooks/telegram", headers=webhook_headers, json=text_update
+            )
+
+    assert response.status_code == 200
+    assert len(repository.saved_captures) == 1
+    capture = repository.saved_captures[0]
+    assert capture.original_input == "Remember the architecture sketch"
+    assert capture.classification.model_dump(mode="json") == {
+        "title": "Remember the architecture sketch",
+        "type": "Thought",
+        "domain": "Personal",
+        "location": None,
+        "due": None,
+        "surface_context": "Anytime",
+        "shopping_kind": "None",
+        "confidence": "Low",
+    }
+    assert telegram.sent_messages == [
+        (
+            ALLOWED_CHAT_ID,
+            "Saved · Thought · Personal · Low confidence\n"
+            "Remember the architecture sketch",
+        )
+    ]

@@ -1,14 +1,20 @@
 """Business-level handling for incoming Telegram updates."""
 
+import asyncio
 import logging
+from collections.abc import Callable
+from datetime import datetime
 from enum import StrEnum
+from zoneinfo import ZoneInfo
 
 from app.integrations.telegram import TelegramClient, TelegramDeliveryError
-from app.models.capture import CaptureInput
+from app.models.capture import CaptureInput, CaptureSummary
+from app.models.classification import Confidence
 from app.models.telegram import TelegramUpdate
 from app.repositories.captures import CaptureRepository
+from app.services.classification import ClassificationService
 
-PERSISTED_ACKNOWLEDGEMENT = "Saved"
+SINGAPORE_TIMEZONE = ZoneInfo("Asia/Singapore")
 
 logger = logging.getLogger(__name__)
 
@@ -28,13 +34,18 @@ class TelegramUpdateService:
         *,
         telegram_client: TelegramClient,
         capture_repository: CaptureRepository,
+        classifier: ClassificationService,
         allowed_user_id: int,
         allowed_chat_id: int,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._telegram_client = telegram_client
         self._capture_repository = capture_repository
+        self._classifier = classifier
         self._allowed_user_id = allowed_user_id
         self._allowed_chat_id = allowed_chat_id
+        self._clock = clock or (lambda: datetime.now(SINGAPORE_TIMEZONE))
+        self._capture_lock = asyncio.Lock()
 
     async def handle(self, update: TelegramUpdate) -> UpdateOutcome:
         message = update.message
@@ -62,18 +73,32 @@ class TelegramUpdateService:
             self._log_outcome(update, UpdateOutcome.IGNORED)
             return UpdateOutcome.IGNORED
 
-        save_status = await self._capture_repository.save_if_new(
-            CaptureInput(
-                original_input=message.text,
+        async with self._capture_lock:
+            summary = await self._capture_repository.find_by_telegram_identity(
                 telegram_update_id=update.update_id,
                 telegram_message_id=message.message_id,
             )
-        )
+            persistence_status = "existing"
+            if summary is None:
+                classification_outcome = await self._classifier.classify(
+                    original_input=message.text,
+                    reference_datetime=self._clock(),
+                )
+                save_result = await self._capture_repository.save_if_new(
+                    CaptureInput(
+                        original_input=message.text,
+                        telegram_update_id=update.update_id,
+                        telegram_message_id=message.message_id,
+                        classification=classification_outcome.classification,
+                    )
+                )
+                summary = save_result.summary
+                persistence_status = save_result.status.value
 
         try:
             await self._telegram_client.send_message(
                 chat_id=message.chat.id,
-                text=PERSISTED_ACKNOWLEDGEMENT,
+                text=self._acknowledgement(summary),
             )
         except TelegramDeliveryError:
             logger.error(
@@ -91,9 +116,16 @@ class TelegramUpdateService:
         self._log_outcome(
             update,
             UpdateOutcome.ACKNOWLEDGED,
-            persistence_status=save_status.value,
+            persistence_status=persistence_status,
         )
         return UpdateOutcome.ACKNOWLEDGED
+
+    @staticmethod
+    def _acknowledgement(summary: CaptureSummary) -> str:
+        heading = f"Saved · {summary.type.value} · {summary.domain.value}"
+        if summary.confidence is Confidence.LOW:
+            heading += " · Low confidence"
+        return f"{heading}\n{summary.title}"
 
     @staticmethod
     def _log_outcome(
