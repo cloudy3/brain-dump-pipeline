@@ -96,7 +96,11 @@ async def test_gateway_requests_structured_output_without_tools_or_afc() -> None
     assert config.automatic_function_calling.disable is True
     assert "Never create another domain" in config.system_instruction
     assert "Add dark mode support to my portfolio" in config.system_instruction
+    assert "Clean up my GitHub README" in config.system_instruction
+    assert "interview question about optimistic locking" in config.system_instruction
     assert "Library@Orchard" in config.system_instruction
+    assert "Call the clinic next Monday" in config.system_instruction
+    assert "Organize my desk sometime" in config.system_instruction
     assert "Visit Hokkaido someday" in config.system_instruction
 
 

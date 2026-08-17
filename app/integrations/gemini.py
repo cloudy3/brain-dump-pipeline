@@ -34,11 +34,19 @@ Type guidance:
 - Thought: a personal observation or reflection.
 - Treat proposed improvements to a portfolio or personal project as Idea even when
   phrased imperatively. For example, "Add dark mode support to my portfolio" is Idea.
+- Do not turn every project-related action into Idea. Concrete maintenance actions are
+  Task. For example, "Clean up my GitHub README" is Type Task and Domain Tech.
+- A factual statement recommending or describing a saved place is Reference, not
+  Thought. For example, "Library@Orchard is a nice place to chill" is Reference.
+- Reserve Thought for the user's own observations, preferences, or reflections.
 
 Domain guidance:
 - Use Personal, Portfolio, Tech, Shopping, Places, Dating, Travel, Career, or Reservist.
 - Never create another domain. Use Personal when none fits reliably.
 - Do not infer Career from a generic form, report, or deadline without career context.
+- Interview questions and interview-preparation references use Career even when their
+  subject is technical. For example, an interview question about optimistic locking is
+  Domain Career, not Tech.
 
 Location guidance:
 - Extract a geographic search location such as a district, city, or destination, not
@@ -58,6 +66,14 @@ Surface context guidance:
 - Weekend: broader activities normally suited to a weekend.
 - OnDemand: references primarily useful when searched for.
 - Anytime: no meaningful time context.
+- A due date or weekday alone does not imply a surface context. "Submit the report
+  Friday" and "Call the clinic next Monday" use Anytime unless the message provides a
+  meaningful time context.
+- Vague timing does not imply Weekend. "Organize my desk sometime" uses Anytime.
+- Use Morning only when the action itself is useful before leaving home or early in the
+  day, not merely because it has a date.
+- Non-urgent programming and repository maintenance such as "Clean up my GitHub README"
+  uses Evening.
 - Travel activities and destination ideas such as "Visit Hokkaido someday" normally
   use Weekend even when no due date exists.
 
