@@ -8,7 +8,7 @@ The goal is simple:
 
 ## Current Status
 
-Phases 1 through 3 are implemented. The service currently provides:
+Phases 1 through 4 are implemented. The service currently provides:
 
 * a FastAPI application with a `/health` endpoint;
 * a Telegram webhook protected by Telegram's secret-token header;
@@ -18,10 +18,12 @@ Phases 1 through 3 are implemented. The service currently provides:
 * explicit Asia/Singapore timestamps for relative due-date interpretation;
 * safe local fallback metadata when Gemini is unavailable or invalid;
 * idempotency checks using Telegram update and message identifiers;
-* a `Saved` acknowledgement sent only after Notion persistence succeeds; and
+* a `Saved` acknowledgement sent only after Notion persistence succeeds;
+* type-aware Telegram inline actions for Done, Bought, Delete, Keep, Snooze, Focus,
+  and Open; and
 * automated tests that use fakes and never call live Telegram or Notion APIs.
 
-Queries, item actions, resurfacing, scheduling, deployment, and migration are planned
+Queries, resurfacing, scheduling, deployment, and migration are planned
 for later phases and are not implemented yet.
 
 The existing personal Brain Dump is outside the application's write scope and must
@@ -93,6 +95,12 @@ Configure Gemini using [the Phase 3 Gemini setup guide](docs/gemini-setup.md).
 | `GEMINI_REQUEST_TIMEOUT_SECONDS` | No | Gemini timeout; defaults to 10 seconds |
 | `NOTION_API_VERSION` | No | Notion API version; defaults to `2026-03-11` |
 | `NOTION_REQUEST_TIMEOUT_SECONDS` | No | Notion timeout; defaults to 10 seconds |
+| `KEEP_TASK_DAYS` | No | Task Keep duration; defaults to 7 days |
+| `KEEP_IDEA_DAYS` | No | Idea Keep duration; defaults to 14 days |
+| `KEEP_THOUGHT_DAYS` | No | Thought Keep duration; defaults to 30 days |
+| `KEEP_REFERENCE_DAYS` | No | Reference Keep duration; defaults to 30 days |
+| `KEEP_PLANNED_PURCHASE_DAYS` | No | Planned-purchase Keep duration; defaults to 30 days |
+| `PLANNED_PURCHASE_POST_BOUGHT_COOLDOWN_DAYS` | No | Remaining Planned-purchase cooldown; defaults to 30 days |
 | `LOG_LEVEL` | No | Application log level; defaults to `INFO` |
 
 Never commit `.env` or real credentials.
@@ -131,13 +139,40 @@ Check Telegram update/message IDs in Brain Dump v2
                                Persist in Notion
                                    |
                                    v
-                           Send classified confirmation
+                   Send classified confirmation + actions
 ```
 
 Blank or unsupported messages are ignored. An invalid secret or unauthorized sender
 receives `403`. A Notion failure receives `502`, and no success acknowledgement is
 sent. If acknowledgement delivery fails after persistence, a Telegram retry finds
 the existing record instead of classifying or inserting it again.
+
+## Telegram Item Actions
+
+Capture confirmations use compact buttons based on current item metadata:
+
+| Item | Actions |
+| --- | --- |
+| Task | Done, Snooze, Keep, Delete, Open |
+| Routine Shopping | Bought, Snooze, Delete, Open |
+| Planned Shopping | Focus, Bought, Keep, Delete, Open |
+| Idea or Thought | Keep, Delete, Open |
+| Reference | Delete, Open |
+
+Keep writes only `SnoozedUntil`: 7 days for Tasks, 14 for Ideas, and 30 for Thoughts,
+References, and Planned purchases by default. Snooze offers tomorrow, next week, two
+weeks, or one calendar month, calculated in `Asia/Singapore`. Neither action changes
+`Due`.
+
+Only one Planned purchase can be focused. Buying the focused purchase applies a
+configurable 30-day cooldown to remaining Planned purchases without shortening any
+later existing snooze, clears remaining focus flags, and does not select a replacement.
+
+Done, Bought, and Delete use Notion's `in_trash=true` operation. Notion does not offer
+permanent deletion through its API, so these pages leave the active workflow but can
+still be recovered from Notion trash. Multi-page Focus and cooldown changes are not
+transactional; their update order is deterministic and retry-safe for this single-user
+V1.
 
 ## Problem
 

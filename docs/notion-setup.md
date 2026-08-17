@@ -1,4 +1,4 @@
-# Notion setup for Phase 2
+# Notion setup for Phases 2–4
 
 This application writes only to a separate database named exactly `Brain Dump v2`.
 Do not rename, duplicate, migrate, share, or modify the existing personal Brain Dump.
@@ -8,13 +8,15 @@ Do not rename, duplicate, migrate, share, or modify the existing personal Brain 
 In the [Notion Developer Portal](https://www.notion.so/profile/integrations), create
 an internal connection for the workspace that will contain `Brain Dump v2`.
 
-Use these capabilities for Phase 2:
+Use these capabilities:
 
 - Read content
 - Insert content
+- Update content
 
 No comment or user-information capability is needed. Update content will be needed
-later for item actions, but it is intentionally not required in Phase 2.
+for Phase 4 item property changes and moving completed, purchased, or deleted pages
+to Notion trash.
 
 Copy the installation access token to `NOTION_API_TOKEN` in `.env`. Never commit or
 paste the real token into documentation.
@@ -68,6 +70,15 @@ Do not add the connection to:
 The runtime validates both the configured database and data source before its first
 write. It refuses to write when the database name is not exactly `Brain Dump v2`, the
 data source belongs to another database, or the schema differs from the table above.
+Every callback page lookup also verifies that the page belongs to this configured data
+source before allowing a mutation.
+
+## Phase 4 deletion semantics
+
+Notion does not expose permanent page deletion through its API. Done, Bought, and
+Delete call the current page-update API with `in_trash=true`. The page disappears from
+the active Brain Dump workflow but remains recoverable from Notion trash. No Status or
+application-level archive property is added.
 
 ## 4. Copy the identifiers
 

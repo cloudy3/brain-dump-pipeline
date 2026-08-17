@@ -17,12 +17,16 @@ from app.models.classification import (
     SurfaceContext,
 )
 from app.repositories.captures import CapturePersistenceError
+from app.repositories.items import ItemPersistenceError
 from app.repositories.notion import (
     EXPECTED_PROPERTY_TYPES,
     EXPECTED_SELECT_OPTIONS,
     NotionCaptureRepository,
 )
 from tests.conftest import NOTION_DATA_SOURCE_ID, NOTION_DATABASE_ID
+
+PAGE_ID = "cccccccccccccccccccccccccccccccc"
+PAGE_URL = f"https://www.notion.so/{PAGE_ID}"
 
 
 def _database_response() -> dict[str, Any]:
@@ -39,9 +43,7 @@ def _data_source_response() -> dict[str, Any]:
         property_schema: dict[str, Any] = {"type": property_type, property_type: {}}
         if name in EXPECTED_SELECT_OPTIONS:
             property_schema["select"] = {
-                "options": [
-                    {"name": option} for option in sorted(EXPECTED_SELECT_OPTIONS[name])
-                ]
+                "options": [{"name": option} for option in sorted(EXPECTED_SELECT_OPTIONS[name])]
             }
         properties[name] = property_schema
     return {
@@ -56,6 +58,7 @@ class FakeNotionGateway:
         self.database = _database_response()
         self.data_source = _data_source_response()
         self.created_properties: list[Mapping[str, Any]] = []
+        self.pages: dict[str, dict[str, Any]] = {}
         self.query_count = 0
         self.fail_operation: str | None = None
 
@@ -75,12 +78,26 @@ class FakeNotionGateway:
         data_source_id: str,
         filter_: Mapping[str, Any],
         page_size: int,
+        start_cursor: str | None = None,
     ) -> NotionResponse:
         self._fail_if("query")
         assert data_source_id == NOTION_DATA_SOURCE_ID
-        assert page_size == 1
         self.query_count += 1
         await asyncio.sleep(0)
+        if "and" in filter_:
+            assert page_size == 100
+            planned_pages = []
+            for page in self.pages.values():
+                properties = page["properties"]
+                if (
+                    properties.get("Domain") == {"select": {"name": "Shopping"}}
+                    and properties.get("ShoppingKind") == {"select": {"name": "Planned"}}
+                    and page.get("in_trash") is not True
+                ):
+                    planned_pages.append(page)
+            return {"results": planned_pages, "has_more": False, "next_cursor": None}
+        assert page_size == 1
+        assert start_cursor is None
         requested_ids = {
             condition["number"]["equals"]
             for condition in filter_["or"]
@@ -93,7 +110,13 @@ class FakeNotionGateway:
                 properties["TelegramMessageId"]["number"],
             }
             if requested_ids & stored_ids:
-                matches.append({"id": "existing-page", "properties": properties})
+                matches.append(
+                    {
+                        "id": PAGE_ID,
+                        "url": PAGE_URL,
+                        "properties": properties,
+                    }
+                )
         return {"results": matches[:1]}
 
     async def create_page(
@@ -106,7 +129,34 @@ class FakeNotionGateway:
         assert data_source_id == NOTION_DATA_SOURCE_ID
         await asyncio.sleep(0)
         self.created_properties.append(properties)
-        return {"id": "created-page"}
+        page = {
+            "id": PAGE_ID,
+            "url": PAGE_URL,
+            "parent": {"type": "data_source_id", "data_source_id": NOTION_DATA_SOURCE_ID},
+            "in_trash": False,
+            "properties": properties,
+        }
+        self.pages[PAGE_ID] = page
+        return page
+
+    async def retrieve_page(self, *, page_id: str) -> NotionResponse:
+        self._fail_if("retrieve_page")
+        return self.pages[page_id]
+
+    async def update_page(
+        self,
+        *,
+        page_id: str,
+        properties: Mapping[str, Any] | None = None,
+        in_trash: bool | None = None,
+    ) -> NotionResponse:
+        self._fail_if("update_page")
+        page = self.pages[page_id]
+        if properties is not None:
+            page["properties"].update(properties)
+        if in_trash is not None:
+            page["in_trash"] = in_trash
+        return page
 
     def _fail_if(self, operation: str) -> None:
         if self.fail_operation == operation:
@@ -157,9 +207,7 @@ async def test_successful_persistence_uses_classification_and_exact_input(
     assert len(gateway.created_properties) == 1
     properties = gateway.created_properties[0]
     title = "".join(item["text"]["content"] for item in properties["Title"]["title"])
-    original = "".join(
-        item["text"]["content"] for item in properties["OriginalInput"]["rich_text"]
-    )
+    original = "".join(item["text"]["content"] for item in properties["OriginalInput"]["rich_text"])
     assert title == "Preserve this exactly"
     assert original == capture.original_input
     assert properties["Type"] == {"select": {"name": "Task"}}
@@ -264,9 +312,7 @@ async def test_schema_validation_rejects_unsafe_target(
     elif mutation == "wrong_property_type":
         gateway.data_source["properties"]["TelegramMessageId"]["type"] = "rich_text"
     elif mutation == "wrong_select_options":
-        gateway.data_source["properties"]["Type"]["select"]["options"] = [
-            {"name": "Task"}
-        ]
+        gateway.data_source["properties"]["Type"]["select"]["options"] = [{"name": "Task"}]
     else:
         gateway.data_source["parent"]["database_id"] = "wrong-database-id"
 
@@ -347,3 +393,97 @@ async def test_lookup_returns_stored_confirmation_without_creating(
     )
 
     assert found == created.summary
+
+
+async def test_item_lookup_is_scoped_to_brain_dump_v2_and_excludes_trash(
+    repository: NotionCaptureRepository,
+    gateway: FakeNotionGateway,
+    capture: CaptureInput,
+) -> None:
+    created = await repository.save_if_new(capture)
+
+    found = await repository.get_by_id(page_id=created.summary.page_id)
+    assert found == created.summary
+
+    gateway.pages[PAGE_ID]["in_trash"] = True
+    assert await repository.get_by_id(page_id=PAGE_ID) is None
+
+
+async def test_item_lookup_rejects_page_outside_brain_dump_v2(
+    repository: NotionCaptureRepository,
+    gateway: FakeNotionGateway,
+    capture: CaptureInput,
+) -> None:
+    await repository.save_if_new(capture)
+    gateway.pages[PAGE_ID]["parent"]["data_source_id"] = "old-brain-dump-source"
+
+    with pytest.raises(ItemPersistenceError, match="outside Brain Dump v2"):
+        await repository.get_by_id(page_id=PAGE_ID)
+
+
+async def test_trash_uses_active_page_and_is_stale_safe(
+    repository: NotionCaptureRepository,
+    gateway: FakeNotionGateway,
+    capture: CaptureInput,
+) -> None:
+    await repository.save_if_new(capture)
+
+    assert await repository.trash(page_id=PAGE_ID) is True
+    assert gateway.pages[PAGE_ID]["in_trash"] is True
+    assert await repository.trash(page_id=PAGE_ID) is False
+
+
+async def test_snooze_updates_only_snoozed_until_and_preserves_due(
+    repository: NotionCaptureRepository,
+    gateway: FakeNotionGateway,
+    capture: CaptureInput,
+) -> None:
+    await repository.save_if_new(capture)
+    original_due = deepcopy(gateway.pages[PAGE_ID]["properties"]["Due"])
+
+    updated = await repository.set_snoozed_until(
+        page_id=PAGE_ID,
+        value=date(2026, 9, 1),
+    )
+
+    assert updated is True
+    assert gateway.pages[PAGE_ID]["properties"]["SnoozedUntil"] == {"date": {"start": "2026-09-01"}}
+    assert gateway.pages[PAGE_ID]["properties"]["Due"] == original_due
+
+
+async def test_planned_purchase_listing_and_focus_updates_are_scoped(
+    repository: NotionCaptureRepository,
+    gateway: FakeNotionGateway,
+) -> None:
+    planned_capture = CaptureInput(
+        original_input="Buy monitor eventually",
+        telegram_update_id=9100,
+        telegram_message_id=50,
+        classification=CaptureClassification(
+            title="Buy monitor",
+            type=CaptureType.TASK,
+            domain=Domain.SHOPPING,
+            location=None,
+            due=None,
+            surface_context=SurfaceContext.EVENING,
+            shopping_kind=ShoppingKind.PLANNED,
+            confidence=Confidence.HIGH,
+        ),
+    )
+    await repository.save_if_new(planned_capture)
+
+    planned = await repository.list_planned_purchases()
+    assert [item.page_id for item in planned] == [PAGE_ID]
+    assert await repository.set_purchase_focus(page_id=PAGE_ID, focused=True) is True
+    assert gateway.pages[PAGE_ID]["properties"]["PurchaseFocus"] == {"checkbox": True}
+
+    assert (
+        await repository.update_planned_purchase_state(
+            page_id=PAGE_ID,
+            snoozed_until=date(2026, 9, 30),
+            focused=False,
+        )
+        is True
+    )
+    assert gateway.pages[PAGE_ID]["properties"]["PurchaseFocus"] == {"checkbox": False}
+    assert gateway.pages[PAGE_ID]["properties"]["SnoozedUntil"] == {"date": {"start": "2026-09-30"}}

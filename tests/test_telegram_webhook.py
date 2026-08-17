@@ -30,9 +30,7 @@ async def test_authorized_text_update_is_acknowledged(
     webhook_headers: dict[str, str],
     text_update: dict[str, object],
 ) -> None:
-    response = await client.post(
-        "/webhooks/telegram", headers=webhook_headers, json=text_update
-    )
+    response = await client.post("/webhooks/telegram", headers=webhook_headers, json=text_update)
 
     assert response.status_code == 200
     assert response.json() == {"status": "acknowledged"}
@@ -42,6 +40,10 @@ async def test_authorized_text_update_is_acknowledged(
             "Saved · Idea · Portfolio\nRemember architecture sketch",
         )
     ]
+    assert telegram_client.sent_markups[0] is not None
+    assert [
+        [button.text for button in row] for row in telegram_client.sent_markups[0].inline_keyboard
+    ] == [["Keep", "Delete"], ["Open"]]
     assert capture_repository.saved_captures == [
         CaptureInput(
             original_input="Remember the architecture sketch",
@@ -129,12 +131,8 @@ async def test_unsupported_updates_are_deterministic_noops(
     webhook_headers: dict[str, str],
     update: dict[str, object],
 ) -> None:
-    first_response = await client.post(
-        "/webhooks/telegram", headers=webhook_headers, json=update
-    )
-    second_response = await client.post(
-        "/webhooks/telegram", headers=webhook_headers, json=update
-    )
+    first_response = await client.post("/webhooks/telegram", headers=webhook_headers, json=update)
+    second_response = await client.post("/webhooks/telegram", headers=webhook_headers, json=update)
 
     assert first_response.status_code == second_response.status_code == 200
     assert first_response.json() == second_response.json() == {"status": "ignored"}
@@ -237,7 +235,13 @@ async def test_notion_failure_does_not_send_success_acknowledgement(
 
 
 class FailingTelegramClient:
-    async def send_message(self, *, chat_id: int, text: str) -> None:
+    async def send_message(self, **_: object) -> None:
+        raise TelegramDeliveryError("safe error")
+
+    async def answer_callback_query(self, **_: object) -> None:
+        raise TelegramDeliveryError("safe error")
+
+    async def edit_message_text(self, **_: object) -> None:
         raise TelegramDeliveryError("safe error")
 
 
@@ -319,7 +323,6 @@ async def test_gemini_failure_uses_fallback_and_still_persists_exact_input(
     assert telegram.sent_messages == [
         (
             ALLOWED_CHAT_ID,
-            "Saved · Thought · Personal · Low confidence\n"
-            "Remember the architecture sketch",
+            "Saved · Thought · Personal · Low confidence\nRemember the architecture sketch",
         )
     ]

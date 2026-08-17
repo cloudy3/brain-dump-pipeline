@@ -3,9 +3,16 @@
 import asyncio
 import logging
 from collections.abc import Mapping
+from datetime import date
 from typing import Any
 
-from app.integrations.notion import NotionGateway, NotionIntegrationError, NotionResponse
+from app.integrations.notion import (
+    NotionGateway,
+    NotionIntegrationError,
+    NotionObjectNotFoundError,
+    NotionResponse,
+)
+from app.models.actions import BrainDumpItem, normalize_page_id
 from app.models.capture import (
     CaptureInput,
     CaptureSaveResult,
@@ -14,6 +21,7 @@ from app.models.capture import (
 )
 from app.models.classification import CaptureType, Confidence, Domain, ShoppingKind
 from app.repositories.captures import CapturePersistenceError
+from app.repositories.items import ItemPersistenceError
 
 logger = logging.getLogger(__name__)
 
@@ -89,9 +97,7 @@ class NotionCaptureRepository:
             if self._validated:
                 return
             try:
-                database = await self._gateway.retrieve_database(
-                    database_id=self._database_id
-                )
+                database = await self._gateway.retrieve_database(database_id=self._database_id)
                 data_source = await self._gateway.retrieve_data_source(
                     data_source_id=self._data_source_id
                 )
@@ -138,10 +144,11 @@ class NotionCaptureRepository:
                         status=CaptureSaveStatus.EXISTING,
                         summary=existing,
                     )
-                await self._gateway.create_page(
+                created_page = await self._gateway.create_page(
                     data_source_id=self._data_source_id,
                     properties=self._properties_for(capture),
                 )
+                summary = self._summary_for(capture, created_page)
         except CapturePersistenceError:
             raise
         except NotionIntegrationError as error:
@@ -152,8 +159,168 @@ class NotionCaptureRepository:
             raise CapturePersistenceError("Notion capture persistence failed") from error
         return CaptureSaveResult(
             status=CaptureSaveStatus.CREATED,
-            summary=self._summary_for(capture),
+            summary=summary,
         )
+
+    async def get_by_id(self, *, page_id: str) -> BrainDumpItem | None:
+        try:
+            await self.validate()
+            page = await self._retrieve_active_page(page_id)
+            return self._item_from_page(page) if page is not None else None
+        except ItemPersistenceError:
+            raise
+        except (CapturePersistenceError, NotionIntegrationError) as error:
+            self._log_failure("notion_item_lookup")
+            raise ItemPersistenceError("Notion item lookup failed") from error
+        except Exception as error:
+            self._log_failure("notion_item_lookup")
+            raise ItemPersistenceError("Notion item lookup failed") from error
+
+    async def trash(self, *, page_id: str) -> bool:
+        try:
+            await self.validate()
+            if await self._retrieve_active_page(page_id) is None:
+                return False
+            try:
+                await self._gateway.update_page(page_id=page_id, in_trash=True)
+            except NotionObjectNotFoundError:
+                return False
+            return True
+        except ItemPersistenceError:
+            raise
+        except (CapturePersistenceError, NotionIntegrationError) as error:
+            self._log_failure("notion_item_trash")
+            raise ItemPersistenceError("Notion item trash failed") from error
+        except Exception as error:
+            self._log_failure("notion_item_trash")
+            raise ItemPersistenceError("Notion item trash failed") from error
+
+    async def set_snoozed_until(self, *, page_id: str, value: date) -> bool:
+        return await self._update_active_item(
+            page_id=page_id,
+            properties={"SnoozedUntil": {"date": {"start": value.isoformat()}}},
+            operation="notion_item_snooze",
+        )
+
+    async def list_planned_purchases(self) -> list[BrainDumpItem]:
+        try:
+            await self.validate()
+            items: list[BrainDumpItem] = []
+            cursor: str | None = None
+            while True:
+                response = await self._gateway.query_data_source(
+                    data_source_id=self._data_source_id,
+                    filter_={
+                        "and": [
+                            {"property": "Domain", "select": {"equals": "Shopping"}},
+                            {
+                                "property": "ShoppingKind",
+                                "select": {"equals": "Planned"},
+                            },
+                        ]
+                    },
+                    page_size=100,
+                    start_cursor=cursor,
+                )
+                results = response.get("results")
+                if not isinstance(results, list):
+                    raise ItemPersistenceError("Notion returned an invalid item list")
+                for page in results:
+                    if not isinstance(page, Mapping):
+                        raise ItemPersistenceError("Notion returned an invalid item page")
+                    if page.get("in_trash") is not True:
+                        items.append(self._item_from_page(page))
+                if response.get("has_more") is not True:
+                    break
+                next_cursor = response.get("next_cursor")
+                if not isinstance(next_cursor, str) or not next_cursor:
+                    raise ItemPersistenceError("Notion returned an invalid pagination cursor")
+                cursor = next_cursor
+            return items
+        except ItemPersistenceError:
+            raise
+        except (CapturePersistenceError, NotionIntegrationError) as error:
+            self._log_failure("notion_planned_purchase_list")
+            raise ItemPersistenceError("Notion planned purchase lookup failed") from error
+        except Exception as error:
+            self._log_failure("notion_planned_purchase_list")
+            raise ItemPersistenceError("Notion planned purchase lookup failed") from error
+
+    async def set_purchase_focus(self, *, page_id: str, focused: bool) -> bool:
+        item = await self.get_by_id(page_id=page_id)
+        if item is None:
+            return False
+        if not item.is_planned_purchase:
+            raise ItemPersistenceError("PurchaseFocus requires a Planned shopping item")
+        return await self._update_active_item(
+            page_id=page_id,
+            properties={"PurchaseFocus": {"checkbox": focused}},
+            operation="notion_purchase_focus",
+        )
+
+    async def update_planned_purchase_state(
+        self,
+        *,
+        page_id: str,
+        snoozed_until: date,
+        focused: bool,
+    ) -> bool:
+        item = await self.get_by_id(page_id=page_id)
+        if item is None:
+            return False
+        if not item.is_planned_purchase:
+            raise ItemPersistenceError("Planned purchase state requires a Planned item")
+        return await self._update_active_item(
+            page_id=page_id,
+            properties={
+                "SnoozedUntil": {"date": {"start": snoozed_until.isoformat()}},
+                "PurchaseFocus": {"checkbox": focused},
+            },
+            operation="notion_planned_purchase_update",
+        )
+
+    async def _retrieve_active_page(self, page_id: str) -> NotionResponse | None:
+        normalized_page_id = normalize_page_id(page_id)
+        try:
+            page = await self._gateway.retrieve_page(page_id=normalized_page_id)
+        except NotionObjectNotFoundError:
+            return None
+        if page.get("in_trash") is True:
+            return None
+        parent = page.get("parent")
+        if not isinstance(parent, Mapping) or not self._same_id(
+            parent.get("data_source_id"), self._data_source_id
+        ):
+            raise ItemPersistenceError("Referenced page is outside Brain Dump v2")
+        return page
+
+    async def _update_active_item(
+        self,
+        *,
+        page_id: str,
+        properties: Mapping[str, Any],
+        operation: str,
+    ) -> bool:
+        try:
+            await self.validate()
+            if await self._retrieve_active_page(page_id) is None:
+                return False
+            try:
+                await self._gateway.update_page(
+                    page_id=normalize_page_id(page_id),
+                    properties=properties,
+                )
+            except NotionObjectNotFoundError:
+                return False
+            return True
+        except ItemPersistenceError:
+            raise
+        except (CapturePersistenceError, NotionIntegrationError) as error:
+            self._log_failure(operation)
+            raise ItemPersistenceError("Notion item update failed") from error
+        except Exception as error:
+            self._log_failure(operation)
+            raise ItemPersistenceError("Notion item update failed") from error
 
     async def _find(
         self,
@@ -185,7 +352,7 @@ class NotionCaptureRepository:
         page = results[0]
         if not isinstance(page, Mapping):
             raise CapturePersistenceError("Notion returned an invalid capture page")
-        return self._summary_from_page(page)
+        return self._item_from_page(page)
 
     def _validate_target(
         self,
@@ -199,8 +366,7 @@ class NotionCaptureRepository:
 
         database_data_sources = database.get("data_sources")
         if not isinstance(database_data_sources, list) or not any(
-            isinstance(item, Mapping)
-            and self._same_id(item.get("id"), self._data_source_id)
+            isinstance(item, Mapping) and self._same_id(item.get("id"), self._data_source_id)
             for item in database_data_sources
         ):
             raise CapturePersistenceError(
@@ -264,45 +430,80 @@ class NotionCaptureRepository:
         if classification.due is not None:
             properties["Due"] = {"date": {"start": classification.due.isoformat()}}
         if classification.shopping_kind is not ShoppingKind.NONE:
-            properties["ShoppingKind"] = {
-                "select": {"name": classification.shopping_kind.value}
-            }
+            properties["ShoppingKind"] = {"select": {"name": classification.shopping_kind.value}}
         return properties
 
     @staticmethod
-    def _summary_for(capture: CaptureInput) -> CaptureSummary:
+    def _summary_for(
+        capture: CaptureInput,
+        page: NotionResponse,
+    ) -> CaptureSummary:
         classification = capture.classification
         return CaptureSummary(
+            page_id=normalize_page_id(_required_string(page, "id")),
+            page_url=_required_https_url(page),
             title=classification.title,
             type=classification.type,
             domain=classification.domain,
+            shopping_kind=classification.shopping_kind,
+            purchase_focus=False,
+            due=classification.due,
+            snoozed_until=None,
             confidence=classification.confidence,
         )
 
     @classmethod
-    def _summary_from_page(cls, page: Mapping[str, Any]) -> CaptureSummary:
+    def _item_from_page(cls, page: Mapping[str, Any]) -> BrainDumpItem:
         properties = page.get("properties")
         if not isinstance(properties, Mapping):
             raise CapturePersistenceError("Stored Notion capture has no readable properties")
         title_property = properties.get("Title")
-        title_value = (
-            title_property.get("title") if isinstance(title_property, Mapping) else None
-        )
+        title_value = title_property.get("title") if isinstance(title_property, Mapping) else None
         title = cls._plain_text(title_value)
         type_name = cls._select_name(properties.get("Type"))
         domain_name = cls._select_name(properties.get("Domain"))
         confidence_name = cls._select_name(properties.get("Confidence"))
+        shopping_kind_name = cls._select_name(properties.get("ShoppingKind"))
         try:
-            return CaptureSummary(
+            return BrainDumpItem(
+                page_id=normalize_page_id(_required_string(page, "id")),
+                page_url=_required_https_url(page),
                 title=title,
                 type=CaptureType(type_name),
                 domain=Domain(domain_name),
+                shopping_kind=(
+                    ShoppingKind(shopping_kind_name) if shopping_kind_name else ShoppingKind.NONE
+                ),
+                purchase_focus=cls._checkbox(properties.get("PurchaseFocus")),
+                due=cls._date_value(properties.get("Due")),
+                snoozed_until=cls._date_value(properties.get("SnoozedUntil")),
                 confidence=Confidence(confidence_name),
             )
         except (ValueError, TypeError) as error:
             raise CapturePersistenceError(
-                "Stored Notion capture has invalid confirmation properties"
+                "Stored Notion capture has invalid item properties"
             ) from error
+
+    @staticmethod
+    def _checkbox(value: object) -> bool:
+        if not isinstance(value, Mapping):
+            return False
+        checkbox = value.get("checkbox")
+        return checkbox if isinstance(checkbox, bool) else False
+
+    @staticmethod
+    def _date_value(value: object) -> date | None:
+        if not isinstance(value, Mapping):
+            return None
+        date_property = value.get("date")
+        if date_property is None:
+            return None
+        if not isinstance(date_property, Mapping):
+            raise ValueError("invalid date property")
+        start = date_property.get("start")
+        if not isinstance(start, str):
+            raise ValueError("invalid date start")
+        return date.fromisoformat(start[:10])
 
     @staticmethod
     def _select_name(value: object) -> str:
@@ -334,8 +535,10 @@ class NotionCaptureRepository:
 
     @staticmethod
     def _same_id(first: object, second: object) -> bool:
-        return isinstance(first, str) and isinstance(second, str) and (
-            first.replace("-", "").lower() == second.replace("-", "").lower()
+        return (
+            isinstance(first, str)
+            and isinstance(second, str)
+            and (first.replace("-", "").lower() == second.replace("-", "").lower())
         )
 
     @staticmethod
@@ -351,3 +554,17 @@ def _rich_text(value: str) -> list[dict[str, Any]]:
         {"type": "text", "text": {"content": value[index : index + RICH_TEXT_CHUNK_SIZE]}}
         for index in range(0, len(value), RICH_TEXT_CHUNK_SIZE)
     ]
+
+
+def _required_string(value: Mapping[str, Any], key: str) -> str:
+    result = value.get(key)
+    if not isinstance(result, str) or not result:
+        raise ValueError(f"Notion page has no valid {key}")
+    return result
+
+
+def _required_https_url(page: Mapping[str, Any]) -> str:
+    url = _required_string(page, "url")
+    if not url.startswith("https://"):
+        raise ValueError("Notion page URL must use HTTPS")
+    return url

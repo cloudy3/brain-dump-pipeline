@@ -5,14 +5,38 @@ from typing import Protocol
 import httpx
 from pydantic import SecretStr
 
+from app.models.telegram import InlineKeyboardMarkup
+
 
 class TelegramDeliveryError(RuntimeError):
     """Raised when Telegram does not accept an outbound message."""
 
 
 class TelegramClient(Protocol):
-    async def send_message(self, *, chat_id: int, text: str) -> None:
-        """Send a plain-text Telegram message."""
+    async def send_message(
+        self,
+        *,
+        chat_id: int,
+        text: str,
+        reply_markup: InlineKeyboardMarkup | None = None,
+    ) -> None: ...
+
+    async def answer_callback_query(
+        self,
+        *,
+        callback_query_id: str,
+        text: str | None = None,
+        show_alert: bool = False,
+    ) -> None: ...
+
+    async def edit_message_text(
+        self,
+        *,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        reply_markup: InlineKeyboardMarkup | None = None,
+    ) -> None: ...
 
 
 class TelegramBotAPIClient:
@@ -27,15 +51,65 @@ class TelegramBotAPIClient:
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         token = bot_token.get_secret_value()
-        self._send_message_url = f"{api_base_url.rstrip('/')}/bot{token}/sendMessage"
+        bot_api_url = f"{api_base_url.rstrip('/')}/bot{token}"
+        self._send_message_url = f"{bot_api_url}/sendMessage"
+        self._answer_callback_query_url = f"{bot_api_url}/answerCallbackQuery"
+        self._edit_message_text_url = f"{bot_api_url}/editMessageText"
         self._http_client = http_client or httpx.AsyncClient(timeout=timeout_seconds)
         self._owns_http_client = http_client is None
 
-    async def send_message(self, *, chat_id: int, text: str) -> None:
+    async def send_message(
+        self,
+        *,
+        chat_id: int,
+        text: str,
+        reply_markup: InlineKeyboardMarkup | None = None,
+    ) -> None:
+        payload: dict[str, object] = {"chat_id": chat_id, "text": text}
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup.model_dump(exclude_none=True)
+        await self._post(self._send_message_url, payload)
+
+    async def answer_callback_query(
+        self,
+        *,
+        callback_query_id: str,
+        text: str | None = None,
+        show_alert: bool = False,
+    ) -> None:
+        payload: dict[str, object] = {
+            "callback_query_id": callback_query_id,
+            "show_alert": show_alert,
+        }
+        if text is not None:
+            payload["text"] = text
+        await self._post(self._answer_callback_query_url, payload)
+
+    async def edit_message_text(
+        self,
+        *,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        reply_markup: InlineKeyboardMarkup | None = None,
+    ) -> None:
+        payload: dict[str, object] = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+            "reply_markup": (
+                reply_markup.model_dump(exclude_none=True)
+                if reply_markup is not None
+                else {"inline_keyboard": []}
+            ),
+        }
+        await self._post(self._edit_message_text_url, payload)
+
+    async def _post(self, url: str, payload: dict[str, object]) -> None:
         try:
             response = await self._http_client.post(
-                self._send_message_url,
-                json={"chat_id": chat_id, "text": text},
+                url,
+                json=payload,
             )
             response.raise_for_status()
             payload = response.json()
@@ -48,4 +122,3 @@ class TelegramBotAPIClient:
     async def aclose(self) -> None:
         if self._owns_http_client:
             await self._http_client.aclose()
-

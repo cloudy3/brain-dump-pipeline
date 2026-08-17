@@ -86,5 +86,32 @@ uv run pytest
 uv run ruff check .
 ```
 
+## Telegram item actions
+
+Saved messages include type-appropriate inline buttons. `Open` is a direct Notion URL
+and does not call the webhook. Every other button returns to the same protected
+Telegram webhook as a callback query.
+
+Available behavior:
+
+- Done trashes a non-shopping Task.
+- Bought trashes a Shopping item. Buying a focused Planned purchase first applies the
+  configured cooldown to all remaining Planned purchases.
+- Delete trashes any item.
+- Keep sets `SnoozedUntil` from the item's configured type duration without changing
+  `Due`.
+- Snooze offers Tomorrow, Next week, 2 weeks, and one calendar month.
+- Focus makes one Planned purchase the sole focused purchase.
+- Open navigates directly to the saved Notion page.
+
+Date calculations use `Asia/Singapore`. The default Keep durations are 7 days for
+Tasks, 14 for Ideas, and 30 for Thoughts, References, and Planned purchases. The
+default post-purchase Planned cooldown is 30 days.
+
+Notion has no multi-page transactions. Focus clears an old focus before setting the
+new one, so a partial failure can leave no focused purchase but will not deliberately
+leave two. A focused Bought action updates remaining purchases before trashing the
+purchased page, making a retry safe if a partial Notion failure occurs.
+
 To run the optional live classifier dataset without writing to Notion, see
 [Gemini setup](gemini-setup.md#optional-live-evaluation).

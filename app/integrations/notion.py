@@ -5,6 +5,7 @@ from typing import Any, Protocol
 
 import httpx
 from notion_client import AsyncClient
+from notion_client.errors import APIResponseError
 from pydantic import SecretStr
 
 NotionResponse = Mapping[str, Any]
@@ -12,6 +13,10 @@ NotionResponse = Mapping[str, Any]
 
 class NotionIntegrationError(RuntimeError):
     """Raised when a Notion API operation fails."""
+
+
+class NotionObjectNotFoundError(NotionIntegrationError):
+    """Raised when Notion reports that a page does not exist or is inaccessible."""
 
 
 class NotionGateway(Protocol):
@@ -25,6 +30,7 @@ class NotionGateway(Protocol):
         data_source_id: str,
         filter_: Mapping[str, Any],
         page_size: int,
+        start_cursor: str | None = None,
     ) -> NotionResponse: ...
 
     async def create_page(
@@ -32,6 +38,16 @@ class NotionGateway(Protocol):
         *,
         data_source_id: str,
         properties: Mapping[str, Any],
+    ) -> NotionResponse: ...
+
+    async def retrieve_page(self, *, page_id: str) -> NotionResponse: ...
+
+    async def update_page(
+        self,
+        *,
+        page_id: str,
+        properties: Mapping[str, Any] | None = None,
+        in_trash: bool | None = None,
     ) -> NotionResponse: ...
 
 
@@ -68,12 +84,18 @@ class NotionSDKGateway:
         data_source_id: str,
         filter_: Mapping[str, Any],
         page_size: int,
+        start_cursor: str | None = None,
     ) -> NotionResponse:
+        kwargs: dict[str, Any] = {
+            "data_source_id": data_source_id,
+            "filter": filter_,
+            "page_size": page_size,
+        }
+        if start_cursor is not None:
+            kwargs["start_cursor"] = start_cursor
         return await self._call(
             self._client.data_sources.query,
-            data_source_id=data_source_id,
-            filter=filter_,
-            page_size=page_size,
+            **kwargs,
         )
 
     async def create_page(
@@ -88,10 +110,31 @@ class NotionSDKGateway:
             properties=properties,
         )
 
+    async def retrieve_page(self, *, page_id: str) -> NotionResponse:
+        return await self._call(self._client.pages.retrieve, page_id=page_id)
+
+    async def update_page(
+        self,
+        *,
+        page_id: str,
+        properties: Mapping[str, Any] | None = None,
+        in_trash: bool | None = None,
+    ) -> NotionResponse:
+        kwargs: dict[str, Any] = {"page_id": page_id}
+        if properties is not None:
+            kwargs["properties"] = properties
+        if in_trash is not None:
+            kwargs["in_trash"] = in_trash
+        return await self._call(self._client.pages.update, **kwargs)
+
     @staticmethod
     async def _call(operation: Any, **kwargs: Any) -> NotionResponse:
         try:
             return await operation(**kwargs)
+        except APIResponseError as error:
+            if error.status == 404:
+                raise NotionObjectNotFoundError("Notion object not found") from error
+            raise NotionIntegrationError("Notion API request failed") from error
         except Exception as error:
             raise NotionIntegrationError("Notion API request failed") from error
 

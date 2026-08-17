@@ -1,5 +1,5 @@
 from collections.abc import AsyncIterator
-from datetime import datetime
+from datetime import date, datetime
 
 import httpx
 import pytest
@@ -9,6 +9,7 @@ from pydantic import SecretStr
 from app.core.config import Settings
 from app.integrations.telegram import TelegramClient
 from app.main import create_app
+from app.models.actions import BrainDumpItem
 from app.models.capture import (
     CaptureInput,
     CaptureSaveResult,
@@ -23,6 +24,7 @@ from app.models.classification import (
     ShoppingKind,
     SurfaceContext,
 )
+from app.models.telegram import InlineKeyboardMarkup
 from app.repositories.captures import CaptureRepository
 from app.services.classification import ClassificationOutcome
 
@@ -32,6 +34,8 @@ ALLOWED_USER_ID = 111_222_333
 ALLOWED_CHAT_ID = 111_222_333
 NOTION_DATABASE_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 NOTION_DATA_SOURCE_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+NOTION_PAGE_ID = "cccccccccccccccccccccccccccccccc"
+NOTION_PAGE_URL = f"https://www.notion.so/{NOTION_PAGE_ID}"
 
 
 DEFAULT_CLASSIFICATION = CaptureClassification(
@@ -49,12 +53,41 @@ DEFAULT_CLASSIFICATION = CaptureClassification(
 class FakeTelegramClient:
     def __init__(self, *, events: list[str] | None = None) -> None:
         self.sent_messages: list[tuple[int, str]] = []
+        self.sent_markups: list[InlineKeyboardMarkup | None] = []
+        self.answered_callbacks: list[tuple[str, str | None, bool]] = []
+        self.edited_messages: list[tuple[int, int, str, InlineKeyboardMarkup | None]] = []
         self._events = events
 
-    async def send_message(self, *, chat_id: int, text: str) -> None:
+    async def send_message(
+        self,
+        *,
+        chat_id: int,
+        text: str,
+        reply_markup: InlineKeyboardMarkup | None = None,
+    ) -> None:
         if self._events is not None:
             self._events.append("telegram")
         self.sent_messages.append((chat_id, text))
+        self.sent_markups.append(reply_markup)
+
+    async def answer_callback_query(
+        self,
+        *,
+        callback_query_id: str,
+        text: str | None = None,
+        show_alert: bool = False,
+    ) -> None:
+        self.answered_callbacks.append((callback_query_id, text, show_alert))
+
+    async def edit_message_text(
+        self,
+        *,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        reply_markup: InlineKeyboardMarkup | None = None,
+    ) -> None:
+        self.edited_messages.append((chat_id, message_id, text, reply_markup))
 
 
 class FakeCaptureRepository:
@@ -63,6 +96,9 @@ class FakeCaptureRepository:
         self.save_attempts = 0
         self.lookup_attempts = 0
         self._summaries: dict[tuple[int, int], CaptureSummary] = {}
+        self.items: dict[str, BrainDumpItem] = {}
+        self.trashed_ids: list[str] = []
+        self.fail_item_operations = False
         self._events = events
 
     async def find_by_telegram_identity(
@@ -85,18 +121,79 @@ class FakeCaptureRepository:
         if existing is not None:
             return CaptureSaveResult(status=CaptureSaveStatus.EXISTING, summary=existing)
         classification = capture.classification
+        page_id = f"{capture.telegram_message_id:032x}"
         summary = CaptureSummary(
+            page_id=page_id,
+            page_url=f"https://www.notion.so/{page_id}",
             title=classification.title,
             type=classification.type,
             domain=classification.domain,
+            shopping_kind=classification.shopping_kind,
+            purchase_focus=False,
+            due=classification.due,
+            snoozed_until=None,
             confidence=classification.confidence,
         )
         self._summaries[identity] = summary
+        self.items[page_id] = summary
         self.saved_captures.append(capture)
         return CaptureSaveResult(status=CaptureSaveStatus.CREATED, summary=summary)
 
     async def validate(self) -> None:
         return None
+
+    async def get_by_id(self, *, page_id: str) -> BrainDumpItem | None:
+        self._raise_if_failing()
+        return self.items.get(page_id)
+
+    async def trash(self, *, page_id: str) -> bool:
+        self._raise_if_failing()
+        if self.items.pop(page_id, None) is None:
+            return False
+        self.trashed_ids.append(page_id)
+        return True
+
+    async def set_snoozed_until(self, *, page_id: str, value: date) -> bool:
+        self._raise_if_failing()
+        item = self.items.get(page_id)
+        if item is None:
+            return False
+        self.items[page_id] = item.model_copy(update={"snoozed_until": value})
+        return True
+
+    async def list_planned_purchases(self) -> list[BrainDumpItem]:
+        self._raise_if_failing()
+        return [item for item in self.items.values() if item.is_planned_purchase]
+
+    async def set_purchase_focus(self, *, page_id: str, focused: bool) -> bool:
+        self._raise_if_failing()
+        item = self.items.get(page_id)
+        if item is None:
+            return False
+        self.items[page_id] = item.model_copy(update={"purchase_focus": focused})
+        return True
+
+    async def update_planned_purchase_state(
+        self,
+        *,
+        page_id: str,
+        snoozed_until: date,
+        focused: bool,
+    ) -> bool:
+        self._raise_if_failing()
+        item = self.items.get(page_id)
+        if item is None:
+            return False
+        self.items[page_id] = item.model_copy(
+            update={"snoozed_until": snoozed_until, "purchase_focus": focused}
+        )
+        return True
+
+    def _raise_if_failing(self) -> None:
+        if self.fail_item_operations:
+            from app.repositories.items import ItemPersistenceError
+
+            raise ItemPersistenceError("safe fake failure")
 
 
 class FakeClassifier:

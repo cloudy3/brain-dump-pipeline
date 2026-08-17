@@ -2,9 +2,10 @@
 
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
-from app.models.classification import CaptureClassification, CaptureType, Confidence, Domain
+from app.models.actions import BrainDumpItem
+from app.models.classification import CaptureClassification
 
 
 class CaptureInput(BaseModel):
@@ -18,15 +19,7 @@ class CaptureInput(BaseModel):
     classification: CaptureClassification
 
 
-class CaptureSummary(BaseModel):
-    """Small stored projection used for duplicate acknowledgements."""
-
-    model_config = ConfigDict(frozen=True)
-
-    title: str = Field(min_length=1)
-    type: CaptureType
-    domain: Domain
-    confidence: Confidence
+CaptureSummary = BrainDumpItem
 
 
 class CaptureSaveStatus(StrEnum):
