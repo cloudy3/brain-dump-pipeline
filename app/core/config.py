@@ -6,6 +6,7 @@ from pydantic import AnyHttpUrl, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.models.actions import ActionPolicy
+from app.models.reviews import ReviewPolicy
 
 ENV_SETTINGS_CONFIG = SettingsConfigDict(
     env_file=".env",
@@ -48,6 +49,17 @@ class Settings(GeminiSettings):
     keep_planned_purchase_days: int = Field(default=30, gt=0)
     planned_purchase_post_bought_cooldown_days: int = Field(default=30, gt=0)
     telegram_query_result_limit: int = Field(default=5, ge=1, le=20)
+    review_morning_limit: int = Field(default=3, ge=1, le=8)
+    review_after_work_task_limit: int = Field(default=3, ge=1, le=8)
+    review_evening_limit: int = Field(default=3, ge=1, le=8)
+    review_weekend_limit: int = Field(default=8, ge=1, le=8)
+    review_routine_shopping_limit: int = Field(default=10, ge=1, le=50)
+    review_task_spacing_days: int = Field(default=2, ge=1)
+    review_routine_shopping_spacing_days: int = Field(default=1, ge=1)
+    review_idea_spacing_days: int = Field(default=7, ge=1)
+    review_thought_spacing_days: int = Field(default=30, ge=1)
+    review_planned_purchase_spacing_days: int = Field(default=14, ge=1)
+    review_reference_spacing_days: int = Field(default=30, ge=1)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
     def action_policy(self) -> ActionPolicy:
@@ -60,4 +72,19 @@ class Settings(GeminiSettings):
             planned_purchase_post_bought_cooldown_days=(
                 self.planned_purchase_post_bought_cooldown_days
             ),
+        )
+
+    def review_policy(self) -> ReviewPolicy:
+        return ReviewPolicy(
+            morning_limit=self.review_morning_limit,
+            after_work_task_limit=self.review_after_work_task_limit,
+            evening_limit=self.review_evening_limit,
+            weekend_limit=self.review_weekend_limit,
+            routine_shopping_limit=self.review_routine_shopping_limit,
+            task_spacing_days=self.review_task_spacing_days,
+            routine_shopping_spacing_days=self.review_routine_shopping_spacing_days,
+            idea_spacing_days=self.review_idea_spacing_days,
+            thought_spacing_days=self.review_thought_spacing_days,
+            planned_purchase_spacing_days=self.review_planned_purchase_spacing_days,
+            reference_spacing_days=self.review_reference_spacing_days,
         )

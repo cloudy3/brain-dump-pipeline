@@ -8,7 +8,7 @@ The goal is simple:
 
 ## Current Status
 
-Phases 1 through 5 are implemented. The service currently provides:
+Phases 1 through 6 are implemented. The service currently provides:
 
 * a FastAPI application with a `/health` endpoint;
 * a Telegram webhook protected by Telegram's secret-token header;
@@ -23,11 +23,13 @@ Phases 1 through 5 are implemented. The service currently provides:
   and Open;
 * conservative natural-language retrieval from saved `Brain Dump v2` data;
 * deterministic query shortcuts that bypass Gemini;
-* Notion coarse filtering plus local keyword ranking; and
+* Notion coarse filtering plus local keyword ranking;
+* a deterministic Morning, AfterWork, Evening, and Weekend resurfacing engine which
+  produces typed, read-only review plans; and
 * automated tests that use fakes and never call live Telegram or Notion APIs.
 
-Proactive resurfacing, scheduling, deployment, and migration are planned for later
-phases and are not implemented yet.
+Scheduled review delivery, deployment, and migration are planned for later phases and
+are not implemented yet. Phase 6 selects review content but does not send it.
 
 The existing personal Brain Dump is outside the application's write scope and must
 remain untouched. Development writes only to the separate `Brain Dump v2` database.
@@ -105,6 +107,12 @@ Configure Gemini using [the Phase 3 Gemini setup guide](docs/gemini-setup.md).
 | `KEEP_PLANNED_PURCHASE_DAYS` | No | Planned-purchase Keep duration; defaults to 30 days |
 | `PLANNED_PURCHASE_POST_BOUGHT_COOLDOWN_DAYS` | No | Remaining Planned-purchase cooldown; defaults to 30 days |
 | `TELEGRAM_QUERY_RESULT_LIMIT` | No | Maximum actionable query results sent; defaults to 5 |
+| `REVIEW_MORNING_LIMIT` | No | Morning Task limit; defaults to 3 |
+| `REVIEW_AFTER_WORK_TASK_LIMIT` | No | AfterWork Task limit; defaults to 3 |
+| `REVIEW_EVENING_LIMIT` | No | Evening entry limit; defaults to 3 |
+| `REVIEW_WEEKEND_LIMIT` | No | Weekend entry limit; defaults to 8 |
+| `REVIEW_ROUTINE_SHOPPING_LIMIT` | No | Routine Shopping group cap; defaults to 10 |
+| `REVIEW_*_SPACING_DAYS` | No | Passive resurfacing intervals; see the Phase 6 guide |
 | `LOG_LEVEL` | No | Application log level; defaults to `INFO` |
 
 Never commit `.env` or real credentials.
@@ -802,6 +810,6 @@ These features should only be considered after the basic capture and resurfacing
 
 ## Development State
 
-Phase 3 is complete. Development stops at each phase boundary so the next phase can
-be reviewed before implementation. Phase 4 will add Telegram item actions; it has
-not started.
+Phase 6 is complete. It builds deterministic `ReviewPlan` values without scheduling,
+delivery, or persistence writes. See [Deterministic resurfacing](docs/resurfacing.md).
+Phase 7 has not started.

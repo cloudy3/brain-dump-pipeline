@@ -114,7 +114,7 @@ def create_app(
 
     application = FastAPI(
         title="Brain Dump Pipeline",
-        version="0.5.0",
+        version="0.6.0",
         lifespan=lifespan,
     )
 

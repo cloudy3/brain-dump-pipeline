@@ -19,11 +19,19 @@ from app.models.capture import (
     CaptureSaveStatus,
     CaptureSummary,
 )
-from app.models.classification import CaptureType, Confidence, Domain, ShoppingKind
+from app.models.classification import (
+    CaptureType,
+    Confidence,
+    Domain,
+    ShoppingKind,
+    SurfaceContext,
+)
 from app.models.queries import DueFilter, QueryCriteria, QueryItem
+from app.models.reviews import ReviewCandidateCriteria, ReviewItem, ReviewWindow
 from app.repositories.captures import CapturePersistenceError
 from app.repositories.items import ItemPersistenceError
 from app.repositories.queries import QueryPersistenceError
+from app.repositories.reviews import ReviewPersistenceError
 
 logger = logging.getLogger(__name__)
 
@@ -292,6 +300,58 @@ class NotionCaptureRepository:
         except Exception as error:
             self._log_failure("notion_manual_query")
             raise QueryPersistenceError("Notion manual query failed") from error
+
+    async def list_candidates(
+        self,
+        *,
+        criteria: ReviewCandidateCriteria,
+    ) -> list[ReviewItem]:
+        """Return active v2 candidates after coarse proactive-review filtering."""
+        try:
+            await self.validate()
+            items: list[ReviewItem] = []
+            cursor: str | None = None
+            filter_ = self._review_filter(criteria)
+            while True:
+                response = await self._gateway.query_data_source(
+                    data_source_id=self._data_source_id,
+                    filter_=filter_,
+                    page_size=100,
+                    start_cursor=cursor,
+                )
+                results = response.get("results")
+                if not isinstance(results, list):
+                    raise ReviewPersistenceError("Notion returned an invalid review result")
+                for page in results:
+                    if not isinstance(page, Mapping):
+                        raise ReviewPersistenceError("Notion returned an invalid review page")
+                    if page.get("in_trash") is True:
+                        continue
+                    parent = page.get("parent")
+                    if not isinstance(parent, Mapping) or not self._same_id(
+                        parent.get("data_source_id"), self._data_source_id
+                    ):
+                        raise ReviewPersistenceError(
+                            "Review candidate is outside Brain Dump v2"
+                        )
+                    items.append(self._review_item_from_page(page))
+                if response.get("has_more") is not True:
+                    break
+                next_cursor = response.get("next_cursor")
+                if not isinstance(next_cursor, str) or not next_cursor:
+                    raise ReviewPersistenceError(
+                        "Notion returned an invalid review pagination cursor"
+                    )
+                cursor = next_cursor
+            return items
+        except ReviewPersistenceError:
+            raise
+        except (CapturePersistenceError, NotionIntegrationError) as error:
+            self._log_failure("notion_proactive_review")
+            raise ReviewPersistenceError("Notion proactive review failed") from error
+        except Exception as error:
+            self._log_failure("notion_proactive_review")
+            raise ReviewPersistenceError("Notion proactive review failed") from error
 
     async def set_purchase_focus(self, *, page_id: str, focused: bool) -> bool:
         item = await self.get_by_id(page_id=page_id)
@@ -566,6 +626,38 @@ class NotionCaptureRepository:
         )
 
     @classmethod
+    def _review_item_from_page(cls, page: Mapping[str, Any]) -> ReviewItem:
+        item = cls._item_from_page(page)
+        properties = page.get("properties")
+        if not isinstance(properties, Mapping):
+            raise ReviewPersistenceError("Stored Notion item has no readable properties")
+        created_property = properties.get("Created")
+        created_value = (
+            created_property.get("created_time") if isinstance(created_property, Mapping) else None
+        )
+        if not isinstance(created_value, str):
+            created_value = page.get("created_time")
+        try:
+            created_at = datetime.fromisoformat(created_value.replace("Z", "+00:00"))
+            surface_context = SurfaceContext(cls._select_name(properties.get("SurfaceContext")))
+            last_surfaced = cls._date_value(properties.get("LastSurfaced"))
+        except (AttributeError, TypeError, ValueError) as error:
+            raise ReviewPersistenceError("Stored Notion review data is invalid") from error
+        if created_at.tzinfo is None or created_at.utcoffset() is None:
+            raise ReviewPersistenceError("Stored Notion Created timestamp must be aware")
+        location_property = properties.get("Location")
+        location_value = (
+            location_property.get("rich_text") if isinstance(location_property, Mapping) else None
+        )
+        return ReviewItem(
+            **item.model_dump(),
+            surface_context=surface_context,
+            created_at=created_at,
+            last_surfaced=last_surfaced,
+            location=cls._plain_text(location_value) or None,
+        )
+
+    @classmethod
     def _query_filter(cls, criteria: QueryCriteria) -> dict[str, Any] | None:
         conditions: list[dict[str, Any]] = []
         if criteria.types:
@@ -605,6 +697,52 @@ class NotionCaptureRepository:
         if len(conditions) == 1:
             return conditions[0]
         return {"and": conditions}
+
+    @classmethod
+    def _review_filter(cls, criteria: ReviewCandidateCriteria) -> dict[str, Any]:
+        if criteria.window is ReviewWindow.MORNING:
+            window_filter: dict[str, Any] = {
+                "and": [
+                    {"property": "Type", "select": {"equals": "Task"}},
+                    {"property": "SurfaceContext", "select": {"equals": "Morning"}},
+                ]
+            }
+        elif criteria.window is ReviewWindow.AFTER_WORK:
+            window_filter = {
+                "or": [
+                    {
+                        "and": [
+                            {"property": "Type", "select": {"equals": "Task"}},
+                            {
+                                "property": "SurfaceContext",
+                                "select": {"equals": "AfterWork"},
+                            },
+                        ]
+                    },
+                    {
+                        "and": [
+                            {"property": "Domain", "select": {"equals": "Shopping"}},
+                            {
+                                "property": "ShoppingKind",
+                                "select": {"equals": "Routine"},
+                            },
+                        ]
+                    },
+                ]
+            }
+        else:
+            contexts = [criteria.window.value, SurfaceContext.ANYTIME.value]
+            window_filter = cls._select_filter("SurfaceContext", contexts)
+        snooze_filter = {
+            "or": [
+                {"property": "SnoozedUntil", "date": {"is_empty": True}},
+                {
+                    "property": "SnoozedUntil",
+                    "date": {"on_or_before": criteria.reference_date.isoformat()},
+                },
+            ]
+        }
+        return {"and": [window_filter, snooze_filter]}
 
     @staticmethod
     def _select_filter(property_name: str, values: list[str]) -> dict[str, Any]:
