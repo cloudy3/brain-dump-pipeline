@@ -26,6 +26,24 @@ async def test_send_message_uses_telegram_bot_api_payload() -> None:
 
 
 @pytest.mark.asyncio
+async def test_send_message_can_be_silent() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.content == (
+            b'{"chat_id":123,"text":"Action","disable_notification":true}'
+        )
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = TelegramBotAPIClient(
+            bot_token=SecretStr("123456:test-token"),
+            api_base_url="https://api.telegram.test",
+            timeout_seconds=1,
+            http_client=http_client,
+        )
+        await client.send_message(chat_id=123, text="Action", disable_notification=True)
+
+
+@pytest.mark.asyncio
 async def test_inline_message_callback_answer_and_edit_use_expected_payloads() -> None:
     requests: list[httpx.Request] = []
 

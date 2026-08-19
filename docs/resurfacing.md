@@ -2,7 +2,8 @@
 
 Phase 6 selects useful active items from the configured Notion database named exactly
 `Brain Dump v2`. It makes no Gemini, web-search, recommendation-service, Telegram, or
-old-Brain-Dump calls. It produces a typed `ReviewPlan`; it does not deliver or mutate it.
+old-Brain-Dump calls. It produces a typed `ReviewPlan`; selection itself does not deliver
+or mutate it. Phase 7 consumes that plan through a separate delivery service.
 
 Every review receives an aware reference timestamp and uses the Asia/Singapore calendar.
 An empty plan is a successful result and Phase 7 should later send nothing for it.
@@ -79,9 +80,11 @@ uv run python -m app.tools.preview_review \
 The command prints JSON, sends no Telegram messages, makes no Gemini calls, and does not
 update `LastSurfaced`, `SnoozedUntil`, or any other Notion property.
 
-## Phase 7 boundary
+## Phase 7 delivery boundary
 
-Phase 7 can render the stable entries directly with the existing Phase 4 action-keyboard
-builder. It must record `LastSurfaced` only for items whose Telegram delivery succeeds.
-Selection and preview never record delivery, and a partial delivery must update only the
-successfully delivered items.
+Phase 7 renders the stable entries with the existing Phase 4 action-keyboard builder. It
+sends one complete primary Telegram summary and records `LastSurfaced` only after that
+succeeds. Normal entries and displayed Routine items are updated; Routine overflow is
+not. Silent per-item action-message failures do not make an already delivered primary
+review unseen. Selection and preview never record delivery. See
+[deployment and scheduling](deployment.md).

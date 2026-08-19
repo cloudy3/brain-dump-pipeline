@@ -41,9 +41,16 @@ def stored_page(page: int, *, trashed: bool = False) -> dict[str, Any]:
 
 
 class ReviewGateway:
-    def __init__(self, responses: list[dict[str, Any]]) -> None:
+    def __init__(
+        self,
+        responses: list[dict[str, Any]],
+        *,
+        pages: dict[str, dict[str, Any]] | None = None,
+    ) -> None:
         self.responses = responses
         self.calls: list[dict[str, Any]] = []
+        self.pages = pages or {}
+        self.update_calls: list[dict[str, Any]] = []
 
     async def retrieve_database(self, *, database_id: str) -> Mapping[str, Any]:
         return {
@@ -86,6 +93,25 @@ class ReviewGateway:
             }
         )
         return self.responses[len(self.calls) - 1]
+
+    async def retrieve_page(self, *, page_id: str) -> Mapping[str, Any]:
+        return self.pages[page_id]
+
+    async def update_page(
+        self,
+        *,
+        page_id: str,
+        properties: Mapping[str, Any] | None = None,
+        in_trash: bool | None = None,
+    ) -> Mapping[str, Any]:
+        self.update_calls.append(
+            {
+                "page_id": page_id,
+                "properties": properties,
+                "in_trash": in_trash,
+            }
+        )
+        return self.pages[page_id]
 
 
 def repository(gateway: ReviewGateway) -> NotionCaptureRepository:
@@ -209,3 +235,54 @@ async def test_review_rejects_invalid_pagination_and_non_v2_parent() -> None:
                 reference_date=date(2026, 8, 20),
             )
         )
+
+
+async def test_last_surfaced_updates_unique_active_v2_items_idempotently() -> None:
+    first_id = f"{1:032x}"
+    second_id = f"{2:032x}"
+    gateway = ReviewGateway(
+        [],
+        pages={first_id: stored_page(1), second_id: stored_page(2)},
+    )
+    repo = repository(gateway)
+
+    await repo.record_last_surfaced(
+        page_ids=(first_id, first_id, second_id),
+        surfaced_on=date(2026, 8, 23),
+    )
+    await repo.record_last_surfaced(
+        page_ids=(first_id,),
+        surfaced_on=date(2026, 8, 23),
+    )
+
+    assert gateway.update_calls == [
+        {
+            "page_id": first_id,
+            "properties": {"LastSurfaced": {"date": {"start": "2026-08-23"}}},
+            "in_trash": None,
+        },
+        {
+            "page_id": second_id,
+            "properties": {"LastSurfaced": {"date": {"start": "2026-08-23"}}},
+            "in_trash": None,
+        },
+        {
+            "page_id": first_id,
+            "properties": {"LastSurfaced": {"date": {"start": "2026-08-23"}}},
+            "in_trash": None,
+        },
+    ]
+
+
+async def test_last_surfaced_refuses_page_outside_v2() -> None:
+    page_id = f"{1:032x}"
+    page = stored_page(1)
+    page["parent"]["data_source_id"] = "old-brain-dump"
+    gateway = ReviewGateway([], pages={page_id: page})
+
+    with pytest.raises(ReviewPersistenceError):
+        await repository(gateway).record_last_surfaced(
+            page_ids=(page_id,),
+            surfaced_on=date(2026, 8, 23),
+        )
+    assert gateway.update_calls == []

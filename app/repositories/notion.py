@@ -353,6 +353,52 @@ class NotionCaptureRepository:
             self._log_failure("notion_proactive_review")
             raise ReviewPersistenceError("Notion proactive review failed") from error
 
+    async def record_last_surfaced(
+        self,
+        *,
+        page_ids: tuple[str, ...],
+        surfaced_on: date,
+    ) -> None:
+        """Idempotently update delivered active items in the guarded v2 target."""
+        try:
+            await self.validate()
+            for page_id in dict.fromkeys(page_ids):
+                page = await self._retrieve_active_page(page_id)
+                if page is None:
+                    logger.warning(
+                        "notion_last_surfaced_item_unavailable",
+                        extra={
+                            "operation": "notion_last_surfaced_update",
+                            "state": "skipped",
+                        },
+                    )
+                    continue
+                try:
+                    await self._gateway.update_page(
+                        page_id=normalize_page_id(page_id),
+                        properties={
+                            "LastSurfaced": {
+                                "date": {"start": surfaced_on.isoformat()}
+                            }
+                        },
+                    )
+                except NotionObjectNotFoundError:
+                    logger.warning(
+                        "notion_last_surfaced_item_disappeared",
+                        extra={
+                            "operation": "notion_last_surfaced_update",
+                            "state": "skipped",
+                        },
+                    )
+        except ReviewPersistenceError:
+            raise
+        except (CapturePersistenceError, ItemPersistenceError, NotionIntegrationError) as error:
+            self._log_failure("notion_last_surfaced_update")
+            raise ReviewPersistenceError("Notion LastSurfaced update failed") from error
+        except Exception as error:
+            self._log_failure("notion_last_surfaced_update")
+            raise ReviewPersistenceError("Notion LastSurfaced update failed") from error
+
     async def set_purchase_focus(self, *, page_id: str, focused: bool) -> bool:
         item = await self.get_by_id(page_id=page_id)
         if item is None:

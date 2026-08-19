@@ -55,6 +55,7 @@ class FakeTelegramClient:
     def __init__(self, *, events: list[str] | None = None) -> None:
         self.sent_messages: list[tuple[int, str]] = []
         self.sent_markups: list[InlineKeyboardMarkup | None] = []
+        self.sent_silently: list[bool] = []
         self.answered_callbacks: list[tuple[str, str | None, bool]] = []
         self.edited_messages: list[tuple[int, int, str, InlineKeyboardMarkup | None]] = []
         self._events = events
@@ -65,11 +66,13 @@ class FakeTelegramClient:
         chat_id: int,
         text: str,
         reply_markup: InlineKeyboardMarkup | None = None,
+        disable_notification: bool = False,
     ) -> None:
         if self._events is not None:
             self._events.append("telegram")
         self.sent_messages.append((chat_id, text))
         self.sent_markups.append(reply_markup)
+        self.sent_silently.append(disable_notification)
 
     async def answer_callback_query(
         self,
@@ -235,6 +238,7 @@ def settings() -> Settings:
     return Settings(
         telegram_bot_token=SecretStr(BOT_TOKEN),
         telegram_webhook_secret=SecretStr(WEBHOOK_SECRET),
+        scheduler_secret=SecretStr("test-scheduler-secret-at-least-32-characters"),
         telegram_allowed_user_id=ALLOWED_USER_ID,
         telegram_allowed_chat_id=ALLOWED_CHAT_ID,
         gemini_api_key=SecretStr("test-gemini-key"),

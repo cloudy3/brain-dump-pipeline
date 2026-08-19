@@ -38,6 +38,11 @@ Start the development server:
 uv run uvicorn app.main:app --reload
 ```
 
+Phase 7 also requires a distinct `SCHEDULER_SECRET` of at least 32 characters. The
+Scheduler endpoint is intended for Cloud Scheduler; use the production Scheduler smoke
+test in [the deployment guide](deployment.md) rather than inventing scheduler headers for
+normal local development.
+
 Check its health from another terminal:
 
 ```bash
@@ -73,8 +78,8 @@ curl -X POST http://127.0.0.1:8000/webhooks/telegram \
 ```
 
 Telegram must eventually be configured to send the same secret through its
-`secret_token` webhook option. Public webhook setup and Cloud Run deployment are
-intentionally deferred to Phase 7.
+`secret_token` webhook option. Public webhook setup, Cloud Run deployment, and scheduled
+delivery testing are documented in [the Phase 7 deployment guide](deployment.md).
 
 ## Checks
 

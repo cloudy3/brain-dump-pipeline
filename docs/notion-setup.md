@@ -1,4 +1,4 @@
-# Notion setup for Phases 2–4
+# Notion setup
 
 This application writes only to a separate database named exactly `Brain Dump v2`.
 Do not rename, duplicate, migrate, share, or modify the existing personal Brain Dump.
@@ -14,9 +14,9 @@ Use these capabilities:
 - Insert content
 - Update content
 
-No comment or user-information capability is needed. Update content will be needed
-for Phase 4 item property changes and moving completed, purchased, or deleted pages
-to Notion trash.
+No comment or user-information capability is needed. Update content is used for Phase 4
+item changes, moving completed/purchased/deleted pages to Notion trash, and Phase 7
+`LastSurfaced` delivery recording.
 
 Copy the installation access token to `NOTION_API_TOKEN` in `.env`. Never commit or
 paste the real token into documentation.
@@ -79,6 +79,14 @@ Notion does not expose permanent page deletion through its API. Done, Bought, an
 Delete call the current page-update API with `in_trash=true`. The page disappears from
 the active Brain Dump workflow but remains recoverable from Notion trash. No Status or
 application-level archive property is added.
+
+## Phase 7 delivery semantics
+
+Phase 7 adds no property or migration. After Telegram accepts a complete scheduled review
+summary, the service writes the existing `LastSurfaced` Date property for displayed active
+items only. Selection, preview, failed primary delivery, and Routine Shopping overflow do
+not write it. Every page is rechecked against the configured Brain Dump v2 data source
+before mutation.
 
 ## 4. Copy the identifiers
 

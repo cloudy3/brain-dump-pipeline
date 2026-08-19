@@ -33,6 +33,7 @@ class Settings(GeminiSettings):
 
     telegram_bot_token: SecretStr = Field(min_length=1)
     telegram_webhook_secret: SecretStr = Field(min_length=1)
+    scheduler_secret: SecretStr = Field(min_length=32)
     telegram_allowed_user_id: int = Field(gt=0)
     telegram_allowed_chat_id: int
     telegram_api_base_url: AnyHttpUrl = AnyHttpUrl("https://api.telegram.org")

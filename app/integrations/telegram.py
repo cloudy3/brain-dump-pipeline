@@ -19,6 +19,7 @@ class TelegramClient(Protocol):
         chat_id: int,
         text: str,
         reply_markup: InlineKeyboardMarkup | None = None,
+        disable_notification: bool = False,
     ) -> None: ...
 
     async def answer_callback_query(
@@ -64,10 +65,13 @@ class TelegramBotAPIClient:
         chat_id: int,
         text: str,
         reply_markup: InlineKeyboardMarkup | None = None,
+        disable_notification: bool = False,
     ) -> None:
         payload: dict[str, object] = {"chat_id": chat_id, "text": text}
         if reply_markup is not None:
             payload["reply_markup"] = reply_markup.model_dump(exclude_none=True)
+        if disable_notification:
+            payload["disable_notification"] = True
         await self._post(self._send_message_url, payload)
 
     async def answer_callback_query(

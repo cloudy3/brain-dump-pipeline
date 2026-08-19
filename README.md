@@ -8,7 +8,7 @@ The goal is simple:
 
 ## Current Status
 
-Phases 1 through 6 are implemented. The service currently provides:
+Phases 1 through 7 are implemented. The service currently provides:
 
 * a FastAPI application with a `/health` endpoint;
 * a Telegram webhook protected by Telegram's secret-token header;
@@ -24,12 +24,15 @@ Phases 1 through 6 are implemented. The service currently provides:
 * conservative natural-language retrieval from saved `Brain Dump v2` data;
 * deterministic query shortcuts that bypass Gemini;
 * Notion coarse filtering plus local keyword ranking;
-* a deterministic Morning, AfterWork, Evening, and Weekend resurfacing engine which
-  produces typed, read-only review plans; and
+* a deterministic Morning, AfterWork, Evening, and Weekend resurfacing engine;
+* separately authenticated scheduled delivery with process-local deduplication;
+* one audible review summary plus silent Phase 4 action messages;
+* post-delivery `LastSurfaced` persistence;
+* Cloud Run and three-job Cloud Scheduler deployment instructions; and
 * automated tests that use fakes and never call live Telegram or Notion APIs.
 
-Scheduled review delivery, deployment, and migration are planned for later phases and
-are not implemented yet. Phase 6 selects review content but does not send it.
+Phase 8 migration has not started. Phase 6 selection remains pure; only the Phase 7
+delivery service sends reviews or records `LastSurfaced`.
 
 The existing personal Brain Dump is outside the application's write scope and must
 remain untouched. Development writes only to the separate `Brain Dump v2` database.
@@ -88,6 +91,7 @@ Configure Gemini using [the Phase 3 Gemini setup guide](docs/gemini-setup.md).
 | --- | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | Yes | Token used to send bot acknowledgements |
 | `TELEGRAM_WEBHOOK_SECRET` | Yes | Validates `X-Telegram-Bot-Api-Secret-Token` |
+| `SCHEDULER_SECRET` | Yes | Independently validates scheduled review requests |
 | `TELEGRAM_ALLOWED_USER_ID` | Yes | Only accepted Telegram sender |
 | `TELEGRAM_ALLOWED_CHAT_ID` | Yes | Only accepted Telegram chat |
 | `GEMINI_API_KEY` | Yes | Gemini Developer API credential |
@@ -116,6 +120,10 @@ Configure Gemini using [the Phase 3 Gemini setup guide](docs/gemini-setup.md).
 | `LOG_LEVEL` | No | Application log level; defaults to `INFO` |
 
 Never commit `.env` or real credentials.
+
+For the production container, Cloud Run deployment, Telegram webhook registration,
+three Scheduler jobs, smoke test, logs, disabling, and rollback, see
+[Phase 7 deployment and scheduled delivery](docs/deployment.md).
 
 ### Checks
 
@@ -810,6 +818,7 @@ These features should only be considered after the basic capture and resurfacing
 
 ## Development State
 
-Phase 6 is complete. It builds deterministic `ReviewPlan` values without scheduling,
-delivery, or persistence writes. See [Deterministic resurfacing](docs/resurfacing.md).
-Phase 7 has not started.
+Phase 7 is complete. Phase 6 still builds deterministic `ReviewPlan` values without side
+effects; Phase 7 authenticates scheduled requests, delivers those plans, and records
+successful delivery. See [Deterministic resurfacing](docs/resurfacing.md) and
+[deployment and scheduling](docs/deployment.md). Phase 8 has not started.

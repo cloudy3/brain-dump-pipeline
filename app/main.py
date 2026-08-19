@@ -19,12 +19,16 @@ from app.repositories.captures import CaptureRepository
 from app.repositories.items import ItemRepository
 from app.repositories.notion import NotionCaptureRepository
 from app.repositories.queries import QueryRepository
+from app.repositories.reviews import ReviewRepository
 from app.services.classification import (
     CaptureClassifier,
     ClassificationService,
 )
 from app.services.item_actions import ItemActionService
 from app.services.queries import ManualQueryService, QueryInterpreter
+from app.services.resurfacing import ResurfacingService
+from app.services.review_delivery import ReviewDeliveryService
+from app.services.scheduler import ScheduledReviewRunner, ScheduledReviewService
 from app.services.telegram_updates import TelegramUpdateService
 
 logger = logging.getLogger(__name__)
@@ -39,6 +43,8 @@ def create_app(
     classifier: ClassificationService | None = None,
     query_interpreter: QueryInterpreter | None = None,
     query_repository: QueryRepository | None = None,
+    review_repository: ReviewRepository | None = None,
+    scheduled_review_service: ScheduledReviewRunner | None = None,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
@@ -55,6 +61,7 @@ def create_app(
         effective_capture_repository = capture_repository
         effective_item_repository = item_repository
         effective_query_repository = query_repository
+        effective_review_repository = review_repository
         if effective_capture_repository is None:
             notion_gateway = NotionSDKGateway(
                 token=effective_settings.notion_api_token,
@@ -68,10 +75,13 @@ def create_app(
             )
             effective_item_repository = effective_capture_repository
             effective_query_repository = effective_capture_repository
+            effective_review_repository = effective_capture_repository
         elif effective_item_repository is None:
             effective_item_repository = cast(ItemRepository, effective_capture_repository)
         if effective_query_repository is None:
             effective_query_repository = cast(QueryRepository, effective_capture_repository)
+        if effective_review_repository is None:
+            effective_review_repository = cast(ReviewRepository, effective_capture_repository)
         effective_classifier = classifier
         effective_query_interpreter = query_interpreter
         if effective_classifier is None or effective_query_interpreter is None:
@@ -101,6 +111,20 @@ def create_app(
             allowed_chat_id=effective_settings.telegram_allowed_chat_id,
             query_result_limit=effective_settings.telegram_query_result_limit,
         )
+        application.state.scheduled_review_service = (
+            scheduled_review_service
+            or ScheduledReviewService(
+                deliverer=ReviewDeliveryService(
+                    planner=ResurfacingService(
+                        repository=effective_review_repository,
+                        policy=effective_settings.review_policy(),
+                    ),
+                    repository=effective_review_repository,
+                    telegram_client=effective_telegram_client,
+                    chat_id=effective_settings.telegram_allowed_chat_id,
+                )
+            )
+        )
 
         try:
             yield
@@ -114,7 +138,7 @@ def create_app(
 
     application = FastAPI(
         title="Brain Dump Pipeline",
-        version="0.6.0",
+        version="0.7.0",
         lifespan=lifespan,
     )
 
