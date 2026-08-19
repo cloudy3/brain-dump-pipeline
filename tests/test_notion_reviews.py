@@ -122,79 +122,69 @@ async def test_review_query_paginates_projects_fields_and_excludes_trash() -> No
 
 
 @pytest.mark.parametrize(
-    ("window", "expected_window_filter"),
+    ("window", "expected_window_branches"),
     [
         (
             ReviewWindow.MORNING,
-            {
-                "and": [
+            [
+                [
                     {"property": "Type", "select": {"equals": "Task"}},
                     {"property": "SurfaceContext", "select": {"equals": "Morning"}},
                 ]
-            },
+            ],
         ),
         (
             ReviewWindow.AFTER_WORK,
-            {
-                "or": [
+            [
+                [
+                    {"property": "Type", "select": {"equals": "Task"}},
                     {
-                        "and": [
-                            {"property": "Type", "select": {"equals": "Task"}},
-                            {
-                                "property": "SurfaceContext",
-                                "select": {"equals": "AfterWork"},
-                            },
-                        ]
+                        "property": "SurfaceContext",
+                        "select": {"equals": "AfterWork"},
                     },
+                ],
+                [
+                    {"property": "Domain", "select": {"equals": "Shopping"}},
                     {
-                        "and": [
-                            {"property": "Domain", "select": {"equals": "Shopping"}},
-                            {
-                                "property": "ShoppingKind",
-                                "select": {"equals": "Routine"},
-                            },
-                        ]
+                        "property": "ShoppingKind",
+                        "select": {"equals": "Routine"},
                     },
                 ]
-            },
+            ],
         ),
         (
             ReviewWindow.EVENING,
-            {
-                "or": [
-                    {"property": "SurfaceContext", "select": {"equals": "Evening"}},
-                    {"property": "SurfaceContext", "select": {"equals": "Anytime"}},
-                ]
-            },
+            [
+                [{"property": "SurfaceContext", "select": {"equals": "Evening"}}],
+                [{"property": "SurfaceContext", "select": {"equals": "Anytime"}}],
+            ],
         ),
         (
             ReviewWindow.WEEKEND,
-            {
-                "or": [
-                    {"property": "SurfaceContext", "select": {"equals": "Weekend"}},
-                    {"property": "SurfaceContext", "select": {"equals": "Anytime"}},
-                ]
-            },
+            [
+                [{"property": "SurfaceContext", "select": {"equals": "Weekend"}}],
+                [{"property": "SurfaceContext", "select": {"equals": "Anytime"}}],
+            ],
         ),
     ],
 )
-def test_review_filters_are_structured_and_snooze_aware(
+def test_review_filters_respect_notion_nesting_limit_and_include_snooze(
     window: ReviewWindow,
-    expected_window_filter: dict[str, Any],
+    expected_window_branches: list[list[dict[str, Any]]],
 ) -> None:
     criteria = ReviewCandidateCriteria(window=window, reference_date=date(2026, 8, 20))
+    snooze_conditions = [
+        {"property": "SnoozedUntil", "date": {"is_empty": True}},
+        {
+            "property": "SnoozedUntil",
+            "date": {"on_or_before": "2026-08-20"},
+        },
+    ]
     assert NotionCaptureRepository._review_filter(criteria) == {
-        "and": [
-            expected_window_filter,
-            {
-                "or": [
-                    {"property": "SnoozedUntil", "date": {"is_empty": True}},
-                    {
-                        "property": "SnoozedUntil",
-                        "date": {"on_or_before": "2026-08-20"},
-                    },
-                ]
-            },
+        "or": [
+            {"and": [*window_branch, snooze_condition]}
+            for window_branch in expected_window_branches
+            for snooze_condition in snooze_conditions
         ]
     }
 

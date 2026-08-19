@@ -700,49 +700,52 @@ class NotionCaptureRepository:
 
     @classmethod
     def _review_filter(cls, criteria: ReviewCandidateCriteria) -> dict[str, Any]:
+        window_branches: list[list[dict[str, Any]]]
         if criteria.window is ReviewWindow.MORNING:
-            window_filter: dict[str, Any] = {
-                "and": [
+            window_branches = [
+                [
                     {"property": "Type", "select": {"equals": "Task"}},
                     {"property": "SurfaceContext", "select": {"equals": "Morning"}},
                 ]
-            }
+            ]
         elif criteria.window is ReviewWindow.AFTER_WORK:
-            window_filter = {
-                "or": [
+            window_branches = [
+                [
+                    {"property": "Type", "select": {"equals": "Task"}},
                     {
-                        "and": [
-                            {"property": "Type", "select": {"equals": "Task"}},
-                            {
-                                "property": "SurfaceContext",
-                                "select": {"equals": "AfterWork"},
-                            },
-                        ]
+                        "property": "SurfaceContext",
+                        "select": {"equals": "AfterWork"},
                     },
+                ],
+                [
+                    {"property": "Domain", "select": {"equals": "Shopping"}},
                     {
-                        "and": [
-                            {"property": "Domain", "select": {"equals": "Shopping"}},
-                            {
-                                "property": "ShoppingKind",
-                                "select": {"equals": "Routine"},
-                            },
-                        ]
+                        "property": "ShoppingKind",
+                        "select": {"equals": "Routine"},
                     },
                 ]
-            }
+            ]
         else:
             contexts = [criteria.window.value, SurfaceContext.ANYTIME.value]
-            window_filter = cls._select_filter("SurfaceContext", contexts)
-        snooze_filter = {
+            window_branches = [
+                [{"property": "SurfaceContext", "select": {"equals": context}}]
+                for context in contexts
+            ]
+        snooze_conditions = [
+            {"property": "SnoozedUntil", "date": {"is_empty": True}},
+            {
+                "property": "SnoozedUntil",
+                "date": {"on_or_before": criteria.reference_date.isoformat()},
+            },
+        ]
+        # DNF keeps compound filters at Notion's maximum nesting depth of two.
+        return {
             "or": [
-                {"property": "SnoozedUntil", "date": {"is_empty": True}},
-                {
-                    "property": "SnoozedUntil",
-                    "date": {"on_or_before": criteria.reference_date.isoformat()},
-                },
+                {"and": [*window_branch, snooze_condition]}
+                for window_branch in window_branches
+                for snooze_condition in snooze_conditions
             ]
         }
-        return {"and": [window_filter, snooze_filter]}
 
     @staticmethod
     def _select_filter(property_name: str, values: list[str]) -> dict[str, Any]:
