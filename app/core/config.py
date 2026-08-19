@@ -47,6 +47,7 @@ class Settings(GeminiSettings):
     keep_reference_days: int = Field(default=30, gt=0)
     keep_planned_purchase_days: int = Field(default=30, gt=0)
     planned_purchase_post_bought_cooldown_days: int = Field(default=30, gt=0)
+    telegram_query_result_limit: int = Field(default=5, ge=1, le=20)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
     def action_policy(self) -> ActionPolicy:

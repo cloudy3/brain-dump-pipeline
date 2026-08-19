@@ -10,20 +10,30 @@ from app.core.time import SINGAPORE_TIMEZONE
 from app.integrations.telegram import TelegramClient, TelegramDeliveryError
 from app.models.actions import ActionCallback, BrainDumpItem, CallbackAction
 from app.models.capture import CaptureInput
-from app.models.classification import CaptureType, Confidence
+from app.models.classification import Confidence, Domain
+from app.models.queries import QueryItem
 from app.models.telegram import (
-    InlineKeyboardButton,
     InlineKeyboardMarkup,
     TelegramCallbackQuery,
     TelegramUpdate,
 )
 from app.repositories.captures import CaptureRepository
 from app.repositories.items import ItemPersistenceError
+from app.repositories.queries import QueryPersistenceError
 from app.services.classification import ClassificationService
 from app.services.item_actions import (
     ActionResultStatus,
     ItemActionResult,
     ItemActionService,
+)
+from app.services.item_views import ItemActionViewBuilder
+from app.services.queries import (
+    ManualQueryService,
+    QueryInterpretationError,
+    QueryRequest,
+    QueryResults,
+    detect_query_request,
+    no_results_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -46,16 +56,20 @@ class TelegramUpdateService:
         capture_repository: CaptureRepository,
         classifier: ClassificationService,
         item_action_service: ItemActionService,
+        query_service: ManualQueryService,
         allowed_user_id: int,
         allowed_chat_id: int,
+        query_result_limit: int = 5,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._telegram_client = telegram_client
         self._capture_repository = capture_repository
         self._classifier = classifier
         self._item_action_service = item_action_service
+        self._query_service = query_service
         self._allowed_user_id = allowed_user_id
         self._allowed_chat_id = allowed_chat_id
+        self._query_result_limit = query_result_limit
         self._clock = clock or (lambda: datetime.now(SINGAPORE_TIMEZONE))
         self._capture_lock = asyncio.Lock()
 
@@ -87,6 +101,14 @@ class TelegramUpdateService:
         if message.text is None or not message.text.strip():
             self._log_outcome(update, UpdateOutcome.IGNORED)
             return UpdateOutcome.IGNORED
+
+        query_request = detect_query_request(message.text)
+        if query_request is not None:
+            return await self._handle_query(
+                update=update,
+                chat_id=message.chat.id,
+                request=query_request,
+            )
 
         async with self._capture_lock:
             summary = await self._capture_repository.find_by_telegram_identity(
@@ -135,6 +157,94 @@ class TelegramUpdateService:
             persistence_status=persistence_status,
         )
         return UpdateOutcome.ACKNOWLEDGED
+
+    async def _handle_query(
+        self,
+        *,
+        update: TelegramUpdate,
+        chat_id: int,
+        request: QueryRequest,
+    ) -> UpdateOutcome:
+        try:
+            results = await self._query_service.execute(
+                request=request,
+                reference_datetime=self._clock(),
+            )
+        except QueryInterpretationError as error:
+            logger.warning(
+                "telegram_query_interpretation_failed",
+                extra={
+                    "operation": "telegram_query",
+                    "update_id": update.update_id,
+                    "state": "failure",
+                    "error_type": type(error.__cause__ or error).__name__,
+                },
+            )
+            await self._telegram_client.send_message(
+                chat_id=chat_id,
+                text=(
+                    "I wasn't sure what you wanted to search. Try something like:\n"
+                    '"show portfolio ideas"'
+                ),
+            )
+        except QueryPersistenceError as error:
+            logger.error(
+                "telegram_query_repository_failed",
+                extra={
+                    "operation": "telegram_query",
+                    "update_id": update.update_id,
+                    "state": "failure",
+                    "error_type": type(error).__name__,
+                },
+            )
+            await self._telegram_client.send_message(
+                chat_id=chat_id,
+                text="Couldn't search saved Brain Dump items. Please try again.",
+            )
+        else:
+            await self._send_query_results(chat_id=chat_id, results=results)
+        self._log_outcome(update, UpdateOutcome.ACKNOWLEDGED, persistence_status="query")
+        return UpdateOutcome.ACKNOWLEDGED
+
+    async def _send_query_results(self, *, chat_id: int, results: QueryResults) -> None:
+        if not results.items:
+            await self._telegram_client.send_message(
+                chat_id=chat_id,
+                text=no_results_message(results.plan),
+            )
+            return
+        visible = results.items[: self._query_result_limit]
+        suffix = (
+            f"Showing {len(visible)} of {len(results.items)}"
+            if len(visible) < len(results.items)
+            else f"{len(visible)} saved item{'s' if len(visible) != 1 else ''}"
+        )
+        await self._telegram_client.send_message(
+            chat_id=chat_id,
+            text=f"{results.label}\n{suffix}",
+        )
+        for index, item in enumerate(visible, start=1):
+            await self._telegram_client.send_message(
+                chat_id=chat_id,
+                text=self._query_item_text(index, item),
+                reply_markup=self._action_keyboard(item),
+            )
+
+    @staticmethod
+    def _query_item_text(index: int, item: QueryItem) -> str:
+        metadata: str
+        if item.domain is Domain.SHOPPING:
+            metadata = item.shopping_kind.value
+            if item.due is not None:
+                metadata += f" · Due {item.due.day} {item.due:%b}"
+        elif item.due is not None:
+            metadata = f"Due {item.due.day} {item.due:%b}"
+        elif item.domain is Domain.PLACES and item.location:
+            metadata = item.location
+        else:
+            saved = item.created_at.astimezone(SINGAPORE_TIMEZONE).date()
+            metadata = f"Saved {saved.day} {saved:%b}"
+        return f"{index}. {item.title}\n{metadata}"
 
     @staticmethod
     def _acknowledgement(summary: BrainDumpItem) -> str:
@@ -307,74 +417,11 @@ class TelegramUpdateService:
 
     @classmethod
     def _action_keyboard(cls, item: BrainDumpItem) -> InlineKeyboardMarkup:
-        if item.is_planned_purchase:
-            rows = [
-                [
-                    cls._button("Focus", CallbackAction.FOCUS, item),
-                    cls._button("Bought", CallbackAction.BOUGHT, item),
-                ],
-                [
-                    cls._button("Keep", CallbackAction.KEEP, item),
-                    cls._button("Delete", CallbackAction.DELETE, item),
-                ],
-            ]
-        elif item.is_routine_purchase:
-            rows = [
-                [
-                    cls._button("Bought", CallbackAction.BOUGHT, item),
-                    cls._button("Snooze", CallbackAction.SNOOZE_MENU, item),
-                ],
-                [cls._button("Delete", CallbackAction.DELETE, item)],
-            ]
-        elif item.type is CaptureType.TASK:
-            rows = [
-                [
-                    cls._button("Done", CallbackAction.DONE, item),
-                    cls._button("Snooze", CallbackAction.SNOOZE_MENU, item),
-                ],
-                [
-                    cls._button("Keep", CallbackAction.KEEP, item),
-                    cls._button("Delete", CallbackAction.DELETE, item),
-                ],
-            ]
-        elif item.type in {CaptureType.IDEA, CaptureType.THOUGHT}:
-            rows = [
-                [
-                    cls._button("Keep", CallbackAction.KEEP, item),
-                    cls._button("Delete", CallbackAction.DELETE, item),
-                ]
-            ]
-        else:
-            rows = [[cls._button("Delete", CallbackAction.DELETE, item)]]
-        rows.append([InlineKeyboardButton(text="Open", url=item.page_url)])
-        return InlineKeyboardMarkup(inline_keyboard=rows)
+        return ItemActionViewBuilder.action_keyboard(item)
 
     @classmethod
     def _snooze_keyboard(cls, item: BrainDumpItem) -> InlineKeyboardMarkup:
-        return InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    cls._button("Tomorrow", CallbackAction.SNOOZE_TOMORROW, item),
-                    cls._button("Next week", CallbackAction.SNOOZE_NEXT_WEEK, item),
-                ],
-                [
-                    cls._button("2 weeks", CallbackAction.SNOOZE_TWO_WEEKS, item),
-                    cls._button("1 month", CallbackAction.SNOOZE_ONE_MONTH, item),
-                ],
-                [cls._button("Back", CallbackAction.BACK, item)],
-            ]
-        )
-
-    @staticmethod
-    def _button(
-        text: str,
-        action: CallbackAction,
-        item: BrainDumpItem,
-    ) -> InlineKeyboardButton:
-        return InlineKeyboardButton(
-            text=text,
-            callback_data=ActionCallback(action=action, page_id=item.page_id).encode(),
-        )
+        return ItemActionViewBuilder.snooze_keyboard(item)
 
     @staticmethod
     def _format_date(value: date | None) -> str:

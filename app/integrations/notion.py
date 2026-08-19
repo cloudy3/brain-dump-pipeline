@@ -28,7 +28,7 @@ class NotionGateway(Protocol):
         self,
         *,
         data_source_id: str,
-        filter_: Mapping[str, Any],
+        filter_: Mapping[str, Any] | None,
         page_size: int,
         start_cursor: str | None = None,
     ) -> NotionResponse: ...
@@ -82,15 +82,16 @@ class NotionSDKGateway:
         self,
         *,
         data_source_id: str,
-        filter_: Mapping[str, Any],
+        filter_: Mapping[str, Any] | None,
         page_size: int,
         start_cursor: str | None = None,
     ) -> NotionResponse:
         kwargs: dict[str, Any] = {
             "data_source_id": data_source_id,
-            "filter": filter_,
             "page_size": page_size,
         }
+        if filter_ is not None:
+            kwargs["filter"] = filter_
         if start_cursor is not None:
             kwargs["start_cursor"] = start_cursor
         return await self._call(

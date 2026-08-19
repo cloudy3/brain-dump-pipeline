@@ -8,7 +8,7 @@ The goal is simple:
 
 ## Current Status
 
-Phases 1 through 4 are implemented. The service currently provides:
+Phases 1 through 5 are implemented. The service currently provides:
 
 * a FastAPI application with a `/health` endpoint;
 * a Telegram webhook protected by Telegram's secret-token header;
@@ -20,11 +20,14 @@ Phases 1 through 4 are implemented. The service currently provides:
 * idempotency checks using Telegram update and message identifiers;
 * a `Saved` acknowledgement sent only after Notion persistence succeeds;
 * type-aware Telegram inline actions for Done, Bought, Delete, Keep, Snooze, Focus,
-  and Open; and
+  and Open;
+* conservative natural-language retrieval from saved `Brain Dump v2` data;
+* deterministic query shortcuts that bypass Gemini;
+* Notion coarse filtering plus local keyword ranking; and
 * automated tests that use fakes and never call live Telegram or Notion APIs.
 
-Queries, resurfacing, scheduling, deployment, and migration are planned
-for later phases and are not implemented yet.
+Proactive resurfacing, scheduling, deployment, and migration are planned for later
+phases and are not implemented yet.
 
 The existing personal Brain Dump is outside the application's write scope and must
 remain untouched. Development writes only to the separate `Brain Dump v2` database.
@@ -101,6 +104,7 @@ Configure Gemini using [the Phase 3 Gemini setup guide](docs/gemini-setup.md).
 | `KEEP_REFERENCE_DAYS` | No | Reference Keep duration; defaults to 30 days |
 | `KEEP_PLANNED_PURCHASE_DAYS` | No | Planned-purchase Keep duration; defaults to 30 days |
 | `PLANNED_PURCHASE_POST_BOUGHT_COOLDOWN_DAYS` | No | Remaining Planned-purchase cooldown; defaults to 30 days |
+| `TELEGRAM_QUERY_RESULT_LIMIT` | No | Maximum actionable query results sent; defaults to 5 |
 | `LOG_LEVEL` | No | Application log level; defaults to `INFO` |
 
 Never commit `.env` or real credentials.
@@ -127,11 +131,21 @@ Validate webhook secret
 Authorize configured user and chat
         |
         v
-Check Telegram update/message IDs in Brain Dump v2
+Detect deterministic shortcut or query candidate
         |
-        +---- Existing capture ----------------------+
-        |                                            |
-        +---- New capture ----> Gemini classification
+        +---- Query ----> Gemini QueryPlan (shortcuts bypass Gemini)
+        |                         |
+        |                         v
+        |               Query Brain Dump v2 only
+        |                         |
+        |                         v
+        |               Rank and send saved results
+        |
+        +---- Capture ----> Check update/message IDs
+                              |
+                              +---- Existing capture -------------------+
+                              |
+                              +---- New capture ----> Gemini classification
                                       |
                                       +---- Failure ----> Safe local fallback
                                       |
@@ -142,10 +156,12 @@ Check Telegram update/message IDs in Brain Dump v2
                    Send classified confirmation + actions
 ```
 
-Blank or unsupported messages are ignored. An invalid secret or unauthorized sender
-receives `403`. A Notion failure receives `502`, and no success acknowledgement is
-sent. If acknowledgement delivery fails after persistence, a Telegram retry finds
-the existing record instead of classifying or inserting it again.
+Blank or unsupported non-text messages are ignored. An invalid secret or unauthorized
+sender receives `403`. A capture-path Notion failure receives `502`, and no success
+acknowledgement is sent; a query-path Notion failure sends a compact search-failure
+message without persisting anything. If acknowledgement delivery fails after capture
+persistence, a Telegram retry finds the existing record instead of classifying or
+inserting it again.
 
 ## Telegram Item Actions
 
@@ -281,9 +297,13 @@ where to chill in Orchard
 where to chill and have dessert at Somerset
 ```
 
-Queries only search personal Brain Dump data.
+Queries only search active saved `Brain Dump v2` data. Snooze and Keep do not hide
+manual results; pages already in Notion trash remain excluded.
 
 V1 does not search the public web for recommendations.
+
+See [Manual queries in Phase 5](docs/querying.md) for shortcuts, routing, ranking,
+result limits, location behavior, and failure semantics.
 
 ## Data Model
 

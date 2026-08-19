@@ -3,7 +3,7 @@
 import asyncio
 import logging
 from collections.abc import Mapping
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from app.integrations.notion import (
@@ -20,8 +20,10 @@ from app.models.capture import (
     CaptureSummary,
 )
 from app.models.classification import CaptureType, Confidence, Domain, ShoppingKind
+from app.models.queries import DueFilter, QueryCriteria, QueryItem
 from app.repositories.captures import CapturePersistenceError
 from app.repositories.items import ItemPersistenceError
+from app.repositories.queries import QueryPersistenceError
 
 logger = logging.getLogger(__name__)
 
@@ -245,6 +247,51 @@ class NotionCaptureRepository:
         except Exception as error:
             self._log_failure("notion_planned_purchase_list")
             raise ItemPersistenceError("Notion planned purchase lookup failed") from error
+
+    async def search(self, *, criteria: QueryCriteria) -> list[QueryItem]:
+        """Return active v2 items after coarse structured Notion filtering."""
+        try:
+            await self.validate()
+            items: list[QueryItem] = []
+            cursor: str | None = None
+            filter_ = self._query_filter(criteria)
+            while True:
+                response = await self._gateway.query_data_source(
+                    data_source_id=self._data_source_id,
+                    filter_=filter_,
+                    page_size=100,
+                    start_cursor=cursor,
+                )
+                results = response.get("results")
+                if not isinstance(results, list):
+                    raise QueryPersistenceError("Notion returned an invalid query result")
+                for page in results:
+                    if not isinstance(page, Mapping):
+                        raise QueryPersistenceError("Notion returned an invalid query page")
+                    if page.get("in_trash") is not True:
+                        parent = page.get("parent")
+                        if not isinstance(parent, Mapping) or not self._same_id(
+                            parent.get("data_source_id"), self._data_source_id
+                        ):
+                            raise QueryPersistenceError(
+                                "Query result is outside Brain Dump v2"
+                            )
+                        items.append(self._query_item_from_page(page))
+                if response.get("has_more") is not True:
+                    break
+                next_cursor = response.get("next_cursor")
+                if not isinstance(next_cursor, str) or not next_cursor:
+                    raise QueryPersistenceError("Notion returned an invalid pagination cursor")
+                cursor = next_cursor
+            return items
+        except QueryPersistenceError:
+            raise
+        except (CapturePersistenceError, NotionIntegrationError) as error:
+            self._log_failure("notion_manual_query")
+            raise QueryPersistenceError("Notion manual query failed") from error
+        except Exception as error:
+            self._log_failure("notion_manual_query")
+            raise QueryPersistenceError("Notion manual query failed") from error
 
     async def set_purchase_focus(self, *, page_id: str, focused: bool) -> bool:
         item = await self.get_by_id(page_id=page_id)
@@ -483,6 +530,109 @@ class NotionCaptureRepository:
             raise CapturePersistenceError(
                 "Stored Notion capture has invalid item properties"
             ) from error
+
+    @classmethod
+    def _query_item_from_page(cls, page: Mapping[str, Any]) -> QueryItem:
+        item = cls._item_from_page(page)
+        properties = page.get("properties")
+        if not isinstance(properties, Mapping):
+            raise QueryPersistenceError("Stored Notion item has no readable properties")
+        location_property = properties.get("Location")
+        original_property = properties.get("OriginalInput")
+        created_property = properties.get("Created")
+        location_value = (
+            location_property.get("rich_text") if isinstance(location_property, Mapping) else None
+        )
+        original_value = (
+            original_property.get("rich_text") if isinstance(original_property, Mapping) else None
+        )
+        created_value = (
+            created_property.get("created_time") if isinstance(created_property, Mapping) else None
+        )
+        if not isinstance(created_value, str):
+            created_value = page.get("created_time")
+        try:
+            created_at = datetime.fromisoformat(created_value.replace("Z", "+00:00"))
+        except (AttributeError, ValueError) as error:
+            raise QueryPersistenceError("Stored Notion item has invalid Created data") from error
+        if created_at.tzinfo is None or created_at.utcoffset() is None:
+            raise QueryPersistenceError("Stored Notion item Created timestamp must be aware")
+        location = cls._plain_text(location_value) or None
+        return QueryItem(
+            **item.model_dump(),
+            location=location,
+            original_input=cls._plain_text(original_value),
+            created_at=created_at,
+        )
+
+    @classmethod
+    def _query_filter(cls, criteria: QueryCriteria) -> dict[str, Any] | None:
+        conditions: list[dict[str, Any]] = []
+        if criteria.types:
+            conditions.append(cls._select_filter("Type", [value.value for value in criteria.types]))
+        if criteria.domains:
+            conditions.append(
+                cls._select_filter("Domain", [value.value for value in criteria.domains])
+            )
+        if criteria.shopping_kind is not None:
+            conditions.append(
+                {
+                    "property": "ShoppingKind",
+                    "select": {"equals": criteria.shopping_kind.value},
+                }
+            )
+        if criteria.location:
+            conditions.append(
+                {
+                    "or": [
+                        {
+                            "property": "Location",
+                            "rich_text": {"contains": criteria.location},
+                        },
+                        {"property": "Title", "title": {"contains": criteria.location}},
+                        {
+                            "property": "OriginalInput",
+                            "rich_text": {"contains": criteria.location},
+                        },
+                    ]
+                }
+            )
+        due = cls._due_filter(criteria)
+        if due is not None:
+            conditions.append(due)
+        if not conditions:
+            return None
+        if len(conditions) == 1:
+            return conditions[0]
+        return {"and": conditions}
+
+    @staticmethod
+    def _select_filter(property_name: str, values: list[str]) -> dict[str, Any]:
+        filters = [{"property": property_name, "select": {"equals": value}} for value in values]
+        return filters[0] if len(filters) == 1 else {"or": filters}
+
+    @staticmethod
+    def _due_filter(criteria: QueryCriteria) -> dict[str, Any] | None:
+        today = criteria.reference_date
+        property_name = "Due"
+        if criteria.due_filter is DueFilter.ANY:
+            return None
+        if criteria.due_filter is DueFilter.TODAY:
+            return {"property": property_name, "date": {"equals": today.isoformat()}}
+        if criteria.due_filter is DueFilter.OVERDUE:
+            return {"property": property_name, "date": {"before": today.isoformat()}}
+        if criteria.due_filter is DueFilter.UPCOMING:
+            return {"property": property_name, "date": {"after": today.isoformat()}}
+        if criteria.due_filter is DueFilter.NO_DUE_DATE:
+            return {"property": property_name, "date": {"is_empty": True}}
+        monday = today - timedelta(days=today.weekday())
+        sunday = monday + timedelta(days=6)
+        return {
+            "and": [
+                {"property": property_name, "date": {"on_or_after": monday.isoformat()}},
+                {"property": property_name, "date": {"on_or_before": sunday.isoformat()}},
+            ]
+        }
 
     @staticmethod
     def _checkbox(value: object) -> bool:

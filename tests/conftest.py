@@ -24,6 +24,7 @@ from app.models.classification import (
     ShoppingKind,
     SurfaceContext,
 )
+from app.models.queries import QueryCriteria, QueryItem
 from app.models.telegram import InlineKeyboardMarkup
 from app.repositories.captures import CaptureRepository
 from app.services.classification import ClassificationOutcome
@@ -99,6 +100,8 @@ class FakeCaptureRepository:
         self.items: dict[str, BrainDumpItem] = {}
         self.trashed_ids: list[str] = []
         self.fail_item_operations = False
+        self.query_items: list[QueryItem] = []
+        self.query_criteria: list[QueryCriteria] = []
         self._events = events
 
     async def find_by_telegram_identity(
@@ -164,6 +167,11 @@ class FakeCaptureRepository:
     async def list_planned_purchases(self) -> list[BrainDumpItem]:
         self._raise_if_failing()
         return [item for item in self.items.values() if item.is_planned_purchase]
+
+    async def search(self, *, criteria: QueryCriteria) -> list[QueryItem]:
+        self._raise_if_failing()
+        self.query_criteria.append(criteria)
+        return self.query_items
 
     async def set_purchase_focus(self, *, page_id: str, focused: bool) -> bool:
         self._raise_if_failing()

@@ -1,0 +1,86 @@
+[
+  {
+    "name": "portfolio_ideas",
+    "input": "show portfolio ideas",
+    "reference_datetime": "2026-08-19T09:00:00+08:00",
+    "expected": {"types": ["Idea"], "domains": ["Portfolio"], "confidence": "High"}
+  },
+  {
+    "name": "old_portfolio_ideas",
+    "input": "show old portfolio ideas",
+    "reference_datetime": "2026-08-19T09:00:00+08:00",
+    "expected": {"types": ["Idea"], "domains": ["Portfolio"], "sort": "Oldest", "confidence": "High"}
+  },
+  {
+    "name": "tasks_today",
+    "input": "what do I need to do today",
+    "reference_datetime": "2026-08-19T09:00:00+08:00",
+    "expected": {"types": ["Task"], "due_filter": "Today", "confidence": "High"}
+  },
+  {
+    "name": "overdue_tasks",
+    "input": "show overdue tasks",
+    "reference_datetime": "2026-08-19T09:00:00+08:00",
+    "expected": {"types": ["Task"], "due_filter": "Overdue", "confidence": "High"}
+  },
+  {
+    "name": "routine_shopping",
+    "input": "what groceries do I need",
+    "reference_datetime": "2026-08-19T09:00:00+08:00",
+    "expected": {"domains": ["Shopping"], "keywords": ["groceries"], "shopping_kind": "Routine", "confidence": "High"}
+  },
+  {
+    "name": "planned_shopping",
+    "input": "show the big things I plan to buy",
+    "reference_datetime": "2026-08-19T09:00:00+08:00",
+    "expected": {"domains": ["Shopping"], "shopping_kind": "Planned", "confidence": "High"}
+  },
+  {
+    "name": "date_ideas",
+    "input": "show date ideas",
+    "reference_datetime": "2026-08-19T09:00:00+08:00",
+    "expected": {"domains": ["Dating"], "confidence": "High"}
+  },
+  {
+    "name": "travel_ideas",
+    "input": "show travel ideas",
+    "reference_datetime": "2026-08-19T09:00:00+08:00",
+    "expected": {"types": ["Idea"], "domains": ["Travel"], "confidence": "High"}
+  },
+  {
+    "name": "saved_food",
+    "input": "where did I save to eat",
+    "reference_datetime": "2026-08-19T09:00:00+08:00",
+    "expected": {"domains": ["Places"], "keywords": ["eat"], "confidence": "High"}
+  },
+  {
+    "name": "orchard_chill",
+    "input": "show places to chill in Orchard",
+    "reference_datetime": "2026-08-19T09:00:00+08:00",
+    "expected": {"domains": ["Places"], "location": "Orchard", "keywords": ["chill"], "confidence": "High"}
+  },
+  {
+    "name": "somerset_dessert",
+    "input": "where to chill and have dessert at Somerset",
+    "reference_datetime": "2026-08-19T09:00:00+08:00",
+    "expected": {"domains": ["Places", "Dating"], "location": "Somerset", "keywords": ["chill", "dessert"], "confidence": "High"}
+  },
+  {
+    "name": "interview_questions",
+    "input": "show interview questions",
+    "reference_datetime": "2026-08-19T09:00:00+08:00",
+    "expected": {"domains": ["Career"], "keywords": ["interview questions"], "confidence": "High"}
+  },
+  {
+    "name": "programming_ideas",
+    "input": "show programming ideas",
+    "reference_datetime": "2026-08-19T09:00:00+08:00",
+    "expected": {"types": ["Idea"], "domains": ["Tech"], "confidence": "High"}
+  },
+  {
+    "name": "random_thoughts",
+    "input": "show random thoughts",
+    "reference_datetime": "2026-08-19T09:00:00+08:00",
+    "expected": {"types": ["Thought"], "confidence": "High"}
+  }
+]

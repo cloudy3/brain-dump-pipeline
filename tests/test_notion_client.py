@@ -101,3 +101,29 @@ async def test_notion_gateway_exposes_safe_not_found_for_stale_pages() -> None:
             await gateway.retrieve_page(page_id="missing-page")
     finally:
         await gateway.aclose()
+
+
+async def test_notion_gateway_omits_filter_for_unstructured_query() -> None:
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"results": []})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    gateway = NotionSDKGateway(
+        token=SecretStr("test-notion-token"),
+        timeout_seconds=4,
+        notion_version="2026-03-11",
+        http_client=http_client,
+    )
+    try:
+        await gateway.query_data_source(
+            data_source_id="data-source-id",
+            filter_=None,
+            page_size=100,
+        )
+    finally:
+        await gateway.aclose()
+
+    assert json.loads(requests[0].content) == {"page_size": 100}
